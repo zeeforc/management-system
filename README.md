@@ -131,7 +131,7 @@ The migration service runs before API/bot/worker/scheduler startup. The `seed` p
 
 ### Existing CloudPanel VPS
 
-Do not publish this stack on ports 80/443 when CloudPanel already serves other sites. Create a separate CloudPanel site for a dedicated subdomain, point its DNS A record to the VPS, and configure its HTTPS virtual host to reverse-proxy to `http://127.0.0.1:18080`. In the private `.env`, set `DOMAIN` to that subdomain, `CADDYFILE_PATH=./infra/Caddyfile.cloudpanel`, `CADDY_HTTP_BIND=127.0.0.1:18080`, and `CADDY_HTTPS_BIND=127.0.0.1:18443`. The CloudPanel Caddyfile serves HTTP only because CloudPanel terminates TLS. Use a unique Compose project name (for example, `-p management-system`) so container and network names remain isolated. Do not edit or restart existing CloudPanel sites or other Compose projects as part of this setup.
+Do not publish this stack on ports 80/443 when CloudPanel already serves other sites. Create a separate CloudPanel site for a dedicated subdomain, point its DNS A record to the VPS, and configure its HTTPS virtual host to reverse-proxy to `http://127.0.0.1:18080`. In the private `.env`, set `DOMAIN` to that subdomain, `CADDYFILE_PATH=./infra/Caddyfile.cloudpanel`, `CADDY_HTTP_BIND=127.0.0.1:18080`, `CADDY_HTTPS_BIND=127.0.0.1:18443`, `POSTGRES_PUBLISH_PORT=15432`, `REDIS_PUBLISH_PORT=16379`, and `API_PUBLISH_PORT=18000`. The CloudPanel Caddyfile serves HTTP only because CloudPanel terminates TLS. Use a unique Compose project name (for example, `-p management-system`) so container and network names remain isolated. Do not edit or restart existing CloudPanel sites or other Compose projects as part of this setup.
 
 Before any production release:
 
