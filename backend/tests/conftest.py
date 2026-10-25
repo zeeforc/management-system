@@ -1,0 +1,11 @@
+"""Shared pytest fixtures for unit, integration, and e2e tests."""
+
+from fastapi.testclient import TestClient
+import pytest
+
+from app.main import app
+
+
+@pytest.fixture
+def client() -> TestClient:
+    return TestClient(app)
