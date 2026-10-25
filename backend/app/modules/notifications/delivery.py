@@ -107,18 +107,19 @@ def build_reminder_message(
     today = current_wib_date()
     days_remaining = (rental.expiration_date - today).days
     remaining_label = "hari ini" if days_remaining == 0 else f"{days_remaining} hari lagi"
+    stage_label = str(notification.reminder_stage).replace("H", "H-")
     expiration_label = (
         f"{rental.expiration_date.day} "
         f"{INDONESIAN_MONTHS[rental.expiration_date.month - 1]} "
         f"{rental.expiration_date.year}"
     )
     text = (
-        f"Halo {escape(customer.display_name)},\n\n"
-        f"Pengingat masa sewa produk digital Anda:\n"
-        f"Produk: <b>{escape(product.name)}</b>\n"
-        f"Varian: <b>{escape(variant.name)}</b>\n"
-        f"Berakhir: <b>{expiration_label}</b>\n"
-        f"Sisa waktu: <b>{remaining_label}</b>\n"
+        f"🔔 <b>PENGINGAT MASA SEWA · {escape(stage_label)}</b>\n\n"
+        f"Halo, <b>{escape(customer.display_name)}</b>\n\n"
+        f"📦 Produk: <b>{escape(product.name)}</b>\n"
+        f"▫️ Varian: <b>{escape(variant.name)}</b>\n"
+        f"📅 Tanggal berakhir: <b>{expiration_label}</b>\n"
+        f"⏳ Waktu tersisa: <b>{remaining_label}</b>\n"
     )
 
     keyboard: InlineKeyboardMarkup | None = None
@@ -140,7 +141,7 @@ def build_reminder_message(
             ).all()
         )
         if offers:
-            text += "\nPilih opsi perpanjangan yang ditawarkan:"
+            text += "\n🎁 <b>Opsi perpanjangan tersedia</b>\nPilih penawaran yang sesuai:"
             rows = [
                 [
                     InlineKeyboardButton(

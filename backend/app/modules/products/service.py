@@ -63,7 +63,12 @@ class ProductService:
             status=payload.status,
         )
         self.repo.create_product(product)
-        self._audit("product.created", str(product.id), None, {"name": product.name, "status": product.status})
+        self._audit(
+            "product.created",
+            str(product.id),
+            None,
+            {"name": product.name, "status": product.status},
+        )
         self.db.commit()
         self.db.refresh(product)
         return ProductRead.model_validate(product)
@@ -72,18 +77,27 @@ class ProductService:
         product = self.repo.get_product(product_id)
         if product is None:
             raise NotFoundError("Product", product_id)
-        before = {"name": product.name, "status": product.status, "category": product.category}
+        before = {
+            "name": product.name,
+            "status": product.status,
+            "category": product.category,
+        }
         if payload.name is not None:
             product.name = payload.name.strip()
-        if payload.description is not None:
+        if "description" in payload.model_fields_set:
             product.description = payload.description
         if payload.category is not None:
             product.category = payload.category.strip()
-        if payload.image_url is not None:
+        if "image_url" in payload.model_fields_set:
             product.image_url = payload.image_url
         if payload.status is not None:
             product.status = payload.status
-        self._audit("product.updated", str(product.id), before, {"name": product.name, "status": product.status})
+        self._audit(
+            "product.updated",
+            str(product.id),
+            before,
+            {"name": product.name, "status": product.status},
+        )
         self.db.commit()
         self.db.refresh(product)
         return ProductRead.model_validate(product)
@@ -96,7 +110,12 @@ class ProductService:
             raise BusinessRuleError("Product is already archived.")
         before = {"status": product.status, "archived_at": None}
         product.archived_at = utc_now()
-        self._audit("product.archived", str(product.id), before, {"archived_at": str(product.archived_at)})
+        self._audit(
+            "product.archived",
+            str(product.id),
+            before,
+            {"archived_at": str(product.archived_at)},
+        )
         self.db.commit()
         self.db.refresh(product)
         return ProductRead.model_validate(product)
@@ -117,16 +136,29 @@ class ProductService:
             status=payload.status,
         )
         self.repo.create_variant(variant)
-        self._audit("variant.created", str(variant.id), None, {"name": variant.name, "product_id": str(variant.product_id)})
+        self._audit(
+            "variant.created",
+            str(variant.id),
+            None,
+            {"name": variant.name, "product_id": str(variant.product_id)},
+        )
         self.db.commit()
         self.db.refresh(variant)
         return ProductVariantRead.model_validate(variant)
 
-    def update_variant(self, variant_id: uuid.UUID, payload: ProductVariantUpdate) -> ProductVariantRead:
+    def update_variant(
+        self,
+        variant_id: uuid.UUID,
+        payload: ProductVariantUpdate,
+    ) -> ProductVariantRead:
         variant = self.repo.get_variant(variant_id)
         if variant is None:
             raise NotFoundError("ProductVariant", variant_id)
-        before = {"name": variant.name, "default_price": str(variant.default_price), "status": variant.status}
+        before = {
+            "name": variant.name,
+            "default_price": str(variant.default_price),
+            "status": variant.status,
+        }
         if payload.name is not None:
             variant.name = payload.name.strip()
         if payload.duration_value is not None:
@@ -139,7 +171,12 @@ class ProductService:
             variant.currency = currency
         if payload.status is not None:
             variant.status = payload.status
-        self._audit("variant.updated", str(variant.id), before, {"name": variant.name, "status": variant.status})
+        self._audit(
+            "variant.updated",
+            str(variant.id),
+            before,
+            {"name": variant.name, "status": variant.status},
+        )
         self.db.commit()
         self.db.refresh(variant)
         return ProductVariantRead.model_validate(variant)
@@ -151,7 +188,12 @@ class ProductService:
         if variant.archived_at is not None:
             raise BusinessRuleError("Variant is already archived.")
         variant.archived_at = utc_now()
-        self._audit("variant.archived", str(variant.id), None, {"archived_at": str(variant.archived_at)})
+        self._audit(
+            "variant.archived",
+            str(variant.id),
+            None,
+            {"archived_at": str(variant.archived_at)},
+        )
         self.db.commit()
         self.db.refresh(variant)
         return ProductVariantRead.model_validate(variant)

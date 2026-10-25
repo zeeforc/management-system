@@ -39,6 +39,7 @@ const error = ref('')
 // Modal add customer
 const showAddCustomer = ref(false)
 const addingCustomer = ref(false)
+const editingCustomerId = ref<string | null>(null)
 const customerForm = ref({
   display_name: '',
   telegram_username: '',
@@ -79,6 +80,24 @@ function onVariantChange() {
   }
 }
 
+function openAddCustomer() {
+  editingCustomerId.value = null
+  customerError.value = ''
+  customerForm.value = {
+    display_name: '',
+    telegram_username: '',
+    status: 'ACTIVE',
+    internal_notes: '',
+    assign_rental: false,
+    product_id: '',
+    product_variant_id: '',
+    start_date: new Date().toISOString().split('T')[0],
+    agreed_price: '',
+    renewal_model: 'CONTINUOUS',
+  }
+  showAddCustomer.value = true
+}
+
 async function fetchCustomers() {
   loading.value = true
   error.value = ''
@@ -104,13 +123,23 @@ async function submitCustomer() {
       display_name: customerForm.value.display_name.trim(),
       status: customerForm.value.status,
     }
-    if (customerForm.value.telegram_username.trim()) payload.telegram_username = customerForm.value.telegram_username.trim()
-    if (customerForm.value.internal_notes.trim()) payload.internal_notes = customerForm.value.internal_notes.trim()
+    if (editingCustomerId.value) {
+      payload.telegram_username = customerForm.value.telegram_username.trim() || null
+      payload.internal_notes = customerForm.value.internal_notes.trim() || null
+    } else {
+      if (customerForm.value.telegram_username.trim()) payload.telegram_username = customerForm.value.telegram_username.trim()
+      if (customerForm.value.internal_notes.trim()) payload.internal_notes = customerForm.value.internal_notes.trim()
+    }
 
-    const res = await api.post('/customers', payload)
-    const createdCustomer = res.data
+    let createdCustomer: Customer | null = null
+    if (editingCustomerId.value) {
+      await api.patch(`/customers/${editingCustomerId.value}`, payload)
+    } else {
+      const res = await api.post('/customers', payload)
+      createdCustomer = res.data
+    }
 
-    if (customerForm.value.assign_rental) {
+    if (customerForm.value.assign_rental && createdCustomer) {
       if (!customerForm.value.product_id || !customerForm.value.product_variant_id) {
         throw new Error('Pilih produk dan varian yang akan disewa.')
       }
@@ -128,6 +157,7 @@ async function submitCustomer() {
     }
 
     showAddCustomer.value = false
+    editingCustomerId.value = null
     customerForm.value = {
       display_name: '',
       telegram_username: '',
@@ -145,6 +175,34 @@ async function submitCustomer() {
     customerError.value = e.response?.data?.detail || e.message || 'Gagal menambah customer.'
   } finally {
     addingCustomer.value = false
+  }
+}
+
+function openEditCustomer(customer: Customer) {
+  editingCustomerId.value = customer.id
+  customerForm.value = {
+    display_name: customer.display_name,
+    telegram_username: customer.telegram_username ?? '',
+    status: customer.status,
+    internal_notes: customer.internal_notes ?? '',
+    assign_rental: false,
+    product_id: '',
+    product_variant_id: '',
+    start_date: new Date().toISOString().split('T')[0],
+    agreed_price: '',
+    renewal_model: 'CONTINUOUS',
+  }
+  customerError.value = ''
+  showAddCustomer.value = true
+}
+
+async function archiveCustomer(customer: Customer) {
+  if (!window.confirm(`Arsipkan customer "${customer.display_name}"? Data dan riwayat rental tetap disimpan.`)) return
+  try {
+    await api.post(`/customers/${customer.id}/archive`)
+    await fetchCustomers()
+  } catch (cause: any) {
+    error.value = cause.response?.data?.detail ?? 'Gagal mengarsipkan customer.'
   }
 }
 
@@ -198,7 +256,7 @@ onMounted(fetchCustomers)
         <p class="mt-1 text-sm text-[#1c1c1f]/45">Profil pelanggan, akun Telegram, dan catatan.</p>
       </div>
       <button
-        @click="showAddCustomer = true"
+        @click="openAddCustomer"
         class="bento-primary inline-flex w-full items-center justify-center gap-2 px-5 py-3 text-sm font-semibold sm:w-auto"
       >
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -240,7 +298,7 @@ onMounted(fetchCustomers)
             <th class="text-left px-6 py-3 font-medium">Status</th>
             <th class="text-left px-6 py-3 font-medium">Catatan</th>
             <th class="text-left px-6 py-3 font-medium">Bergabung</th>
-            <th class="px-6 py-3 font-medium">Telegram</th>
+            <th class="px-6 py-3 font-medium">Aksi</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-[#1c1c1f]/[0.05]">
@@ -260,14 +318,18 @@ onMounted(fetchCustomers)
               <span v-else class="text-gray-300 italic">—</span>
             </td>
             <td class="px-6 py-4 text-gray-400">{{ formatDate(c.created_at) }}</td>
-            <td class="px-6 py-4 text-right">
-              <button
-                class="rounded-full border border-[#1c1c1f]/10 px-3 py-1.5 text-xs font-semibold text-[#1c1c1f]/70 transition hover:bg-[#1c1c1f] hover:text-white disabled:opacity-40"
-                :disabled="creatingLink"
-                @click="createTelegramLink(c)"
-              >
-                {{ c.telegram_user_id ? 'Tautkan ulang' : 'Buat link' }}
-              </button>
+            <td class="px-6 py-4">
+              <div class="flex justify-end gap-2">
+                <button class="rounded-full border border-[#1c1c1f]/10 px-3 py-1.5 text-xs font-semibold" @click="openEditCustomer(c)">Edit</button>
+                <button class="rounded-full border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-700" @click="archiveCustomer(c)">Arsipkan</button>
+                <button
+                  class="rounded-full bg-[#1c1c1f] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40"
+                  :disabled="creatingLink"
+                  @click="createTelegramLink(c)"
+                >
+                  {{ c.telegram_user_id ? 'Tautkan ulang' : 'Buat link' }}
+                </button>
+              </div>
             </td>
           </tr>
         </tbody>
@@ -290,13 +352,17 @@ onMounted(fetchCustomers)
           </div>
           <p v-if="c.internal_notes" class="line-clamp-2 text-xs leading-5 text-slate-500">{{ c.internal_notes }}</p>
           <p class="text-xs text-slate-400">Bergabung {{ formatDate(c.created_at) }}</p>
-          <button
-            class="w-full rounded-full border border-[#1c1c1f]/10 px-3 py-2 text-xs font-semibold text-[#1c1c1f]/70 transition hover:bg-[#1c1c1f] hover:text-white disabled:opacity-40"
-            :disabled="creatingLink"
-            @click="createTelegramLink(c)"
-          >
-            {{ c.telegram_user_id ? 'Buat tautan Telegram baru' : 'Tautkan Telegram' }}
-          </button>
+          <div class="grid grid-cols-2 gap-2">
+            <button class="rounded-full border border-[#1c1c1f]/10 px-3 py-2 text-xs font-semibold" @click="openEditCustomer(c)">Edit</button>
+            <button class="rounded-full border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-700" @click="archiveCustomer(c)">Arsipkan</button>
+            <button
+              class="col-span-2 rounded-full bg-[#1c1c1f] px-3 py-2 text-xs font-semibold text-white disabled:opacity-40"
+              :disabled="creatingLink"
+              @click="createTelegramLink(c)"
+            >
+              {{ c.telegram_user_id ? 'Buat tautan Telegram baru' : 'Tautkan Telegram' }}
+            </button>
+          </div>
         </article>
       </div>
     </div>
@@ -307,7 +373,7 @@ onMounted(fetchCustomers)
       <div v-if="showAddCustomer" class="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/35 p-0 backdrop-blur-md sm:items-center sm:p-4" @click.self="showAddCustomer = false">
         <div class="bento-modal max-h-[92dvh] w-full overflow-y-auto rounded-t-[28px] sm:max-h-[calc(100dvh-2rem)] sm:max-w-lg sm:rounded-[28px]">
           <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-            <h3 class="font-semibold text-gray-900">Tambah Customer Baru</h3>
+            <h3 class="font-semibold text-gray-900">{{ editingCustomerId ? 'Edit Customer' : 'Tambah Customer Baru' }}</h3>
             <button @click="showAddCustomer = false" class="text-gray-400 hover:text-gray-600">
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -346,7 +412,7 @@ onMounted(fetchCustomers)
             </div>
 
             <!-- Optional Initial Rental assignment -->
-            <div class="border-t border-gray-100 pt-3">
+            <div v-if="!editingCustomerId" class="border-t border-gray-100 pt-3">
               <label class="flex items-center gap-2 cursor-pointer">
                 <input
                   v-model="customerForm.assign_rental"

@@ -30,6 +30,7 @@ const error = ref('')
 // Modal add product
 const showAddProduct = ref(false)
 const addingProduct = ref(false)
+const editingProductId = ref<string | null>(null)
 const productForm = ref({ name: '', description: '', category: '', image_url: '', status: 'ACTIVE' })
 const productError = ref('')
 
@@ -38,6 +39,7 @@ const showAddVariant = ref(false)
 const addingVariant = ref(false)
 const selectedProductId = ref('')
 const selectedProductName = ref('')
+const editingVariantId = ref<string | null>(null)
 const variantForm = ref({ name: '', duration_value: 1, duration_unit: 'MONTHS', default_price: '', currency: 'IDR', status: 'ACTIVE' })
 const variantError = ref('')
 
@@ -63,11 +65,21 @@ async function submitProduct() {
       category: productForm.value.category.trim(),
       status: productForm.value.status,
     }
-    if (productForm.value.description.trim()) payload.description = productForm.value.description.trim()
-    if (productForm.value.image_url.trim()) payload.image_url = productForm.value.image_url.trim()
+    if (editingProductId.value) {
+      payload.description = productForm.value.description.trim() || null
+      payload.image_url = productForm.value.image_url.trim() || null
+    } else {
+      if (productForm.value.description.trim()) payload.description = productForm.value.description.trim()
+      if (productForm.value.image_url.trim()) payload.image_url = productForm.value.image_url.trim()
+    }
 
-    await api.post('/products', payload)
+    if (editingProductId.value) {
+      await api.patch(`/products/${editingProductId.value}`, payload)
+    } else {
+      await api.post('/products', payload)
+    }
     showAddProduct.value = false
+    editingProductId.value = null
     productForm.value = { name: '', description: '', category: '', image_url: '', status: 'ACTIVE' }
     await fetchProducts()
   } catch (e: any) {
@@ -77,7 +89,38 @@ async function submitProduct() {
   }
 }
 
+function openAddProduct() {
+  editingProductId.value = null
+  productError.value = ''
+  productForm.value = { name: '', description: '', category: '', image_url: '', status: 'ACTIVE' }
+  showAddProduct.value = true
+}
+
+function openEditProduct(product: Product) {
+  editingProductId.value = product.id
+  productError.value = ''
+  productForm.value = {
+    name: product.name,
+    description: product.description ?? '',
+    category: product.category,
+    image_url: product.image_url ?? '',
+    status: product.status,
+  }
+  showAddProduct.value = true
+}
+
+async function archiveProduct(product: Product) {
+  if (!window.confirm(`Arsipkan produk "${product.name}"? Riwayat rental akan tetap disimpan.`)) return
+  try {
+    await api.post(`/products/${product.id}/archive`)
+    await fetchProducts()
+  } catch (cause: any) {
+    error.value = cause.response?.data?.detail ?? 'Gagal mengarsipkan produk.'
+  }
+}
+
 function openAddVariant(product: Product) {
+  editingVariantId.value = null
   selectedProductId.value = product.id
   selectedProductName.value = product.name
   variantForm.value = { name: '', duration_value: 1, duration_unit: 'MONTHS', default_price: '', currency: 'IDR', status: 'ACTIVE' }
@@ -85,25 +128,59 @@ function openAddVariant(product: Product) {
   showAddVariant.value = true
 }
 
+function openEditVariant(product: Product, variant: ProductVariant) {
+  selectedProductId.value = product.id
+  selectedProductName.value = product.name
+  editingVariantId.value = variant.id
+  variantError.value = ''
+  variantForm.value = {
+    name: variant.name,
+    duration_value: variant.duration_value,
+    duration_unit: variant.duration_unit,
+    default_price: variant.default_price,
+    currency: variant.currency,
+    status: variant.status,
+  }
+  showAddVariant.value = true
+}
+
 async function submitVariant() {
   variantError.value = ''
   addingVariant.value = true
   try {
-    await api.post('/products/variants', {
-      product_id: selectedProductId.value,
+    const payload = {
       name: variantForm.value.name.trim(),
       duration_value: Number(variantForm.value.duration_value),
       duration_unit: variantForm.value.duration_unit,
       default_price: variantForm.value.default_price,
       currency: variantForm.value.currency,
       status: variantForm.value.status,
-    })
+    }
+    if (editingVariantId.value) {
+      await api.patch(`/products/variants/${editingVariantId.value}`, payload)
+    } else {
+      await api.post('/products/variants', {
+        product_id: selectedProductId.value,
+        ...payload,
+      })
+    }
     showAddVariant.value = false
+    editingVariantId.value = null
     await fetchProducts()
   } catch (e: any) {
     variantError.value = e.response?.data?.detail ?? 'Gagal menambah varian.'
   } finally {
     addingVariant.value = false
+  }
+}
+
+async function archiveVariant(variant: ProductVariant) {
+  if (!window.confirm(`Arsipkan varian "${variant.name}"? Riwayat rental tetap disimpan.`)) return
+  try {
+    await api.post(`/products/variants/${variant.id}/archive`)
+    await fetchProducts()
+  } catch (cause: any) {
+    error.value = cause.response?.data?.detail ?? 'Gagal mengarsipkan varian.'
   }
 }
 
@@ -125,7 +202,7 @@ onMounted(fetchProducts)
         <p class="mt-1 text-sm text-[#1c1c1f]/45">Atur produk, durasi, dan harga rental.</p>
       </div>
       <button
-        @click="showAddProduct = true"
+        @click="openAddProduct"
         class="bento-primary inline-flex w-full items-center justify-center gap-2 px-5 py-3 text-sm font-semibold sm:w-auto"
       >
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -182,6 +259,10 @@ onMounted(fetchProducts)
             </svg>
             Tambah Varian
           </button>
+          <div class="flex gap-2 sm:ml-auto">
+            <button class="rounded-full border border-[#1c1c1f]/10 px-3 py-2 text-xs font-semibold" @click="openEditProduct(product)">Edit</button>
+            <button class="rounded-full border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-700" @click="archiveProduct(product)">Arsipkan</button>
+          </div>
         </div>
 
         <!-- Variants -->
@@ -195,9 +276,11 @@ onMounted(fetchProducts)
               <span class="font-medium text-gray-700">{{ v.name }}</span>
               <span class="text-gray-400 ml-2">{{ v.duration_value }} {{ v.duration_unit.toLowerCase() }}</span>
             </div>
-            <div class="flex items-center gap-3">
+            <div class="flex flex-wrap items-center gap-2 sm:gap-3">
               <span class="text-gray-700 font-medium">{{ v.currency }} {{ Number(v.default_price).toLocaleString('id-ID') }}</span>
               <span class="text-xs px-2 py-0.5 rounded-full" :class="statusBadge(v.status)">{{ v.status }}</span>
+              <button class="rounded-full border border-[#1c1c1f]/10 px-3 py-1.5 text-xs font-semibold" @click="openEditVariant(product, v)">Edit</button>
+              <button class="rounded-full border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-700" @click="archiveVariant(v)">Arsipkan</button>
             </div>
           </div>
         </div>
@@ -211,7 +294,7 @@ onMounted(fetchProducts)
       <div v-if="showAddProduct" class="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/35 p-0 backdrop-blur-md sm:items-center sm:p-4" @click.self="showAddProduct = false">
         <div class="bento-modal max-h-[92dvh] w-full overflow-y-auto rounded-t-[28px] sm:max-h-[calc(100dvh-2rem)] sm:max-w-md sm:rounded-[28px]">
           <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-            <h3 class="font-semibold text-gray-900">Tambah Produk Baru</h3>
+            <h3 class="font-semibold text-gray-900">{{ editingProductId ? 'Edit Produk' : 'Tambah Produk Baru' }}</h3>
             <button @click="showAddProduct = false" class="text-gray-400 hover:text-gray-600">
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -273,7 +356,7 @@ onMounted(fetchProducts)
         <div class="bento-modal max-h-[92dvh] w-full overflow-y-auto rounded-t-[28px] sm:max-h-[calc(100dvh-2rem)] sm:max-w-md sm:rounded-[28px]">
           <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
             <div>
-              <h3 class="font-semibold text-gray-900">Tambah Varian</h3>
+              <h3 class="font-semibold text-gray-900">{{ editingVariantId ? 'Edit Varian' : 'Tambah Varian' }}</h3>
               <p class="text-xs text-gray-400 mt-0.5">{{ selectedProductName }}</p>
             </div>
             <button @click="showAddVariant = false" class="text-gray-400 hover:text-gray-600">

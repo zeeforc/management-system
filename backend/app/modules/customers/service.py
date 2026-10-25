@@ -81,11 +81,14 @@ class CustomerService:
         before = {"display_name": customer.display_name, "status": customer.status}
         if payload.display_name is not None:
             customer.display_name = payload.display_name.strip()
-        if payload.telegram_username is not None:
-            customer.telegram_username = payload.telegram_username.lstrip("@").strip()
+        if "telegram_username" in payload.model_fields_set:
+            username = payload.telegram_username
+            customer.telegram_username = (
+                username.lstrip("@").strip() or None if username is not None else None
+            )
         if payload.status is not None:
             customer.status = payload.status
-        if payload.internal_notes is not None:
+        if "internal_notes" in payload.model_fields_set:
             customer.internal_notes = payload.internal_notes
         self._audit(
             "customer.updated",

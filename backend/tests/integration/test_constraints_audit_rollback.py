@@ -9,28 +9,27 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.modules.audit.models import AuditLog
-from app.modules.auth.models import AdminUser, Role, UserRole
+from app.modules.auth.models import AdminUser
 from app.modules.customers.models import Customer
 from app.modules.customers.service import CustomerService
-from app.modules.notifications.models import Notification
+from app.modules.notifications.models import Notification, OutboxEvent
 from app.modules.payments.models import Payment
 from app.modules.payments.service import PaymentService
 from app.modules.products.models import Product, ProductVariant
 from app.modules.products.service import ProductService
 from app.modules.rentals.models import Rental
 from app.modules.rentals.service import RentalService
-from app.modules.renewals.models import RentalRenewal
 from app.shared.datetime_utils import current_wib_date
 from app.shared.enums import (
     DurationUnit,
     NotificationStatus,
+    OutboxStatus,
     PaymentMethod,
     PaymentStatus,
     ReminderStage,
     RenewalModel,
     RentalStatus,
 )
-
 
 # ─── DB Constraint Tests ──────────────────────────────────────────────────────
 
@@ -261,6 +260,66 @@ class TestAuditLogs:
         assert log.after_data["customer_id"] == str(customer.id)
 
 
+class TestRentalEditing:
+    def test_editing_expiration_invalidates_pending_reminders(
+        self, db: Session, active_rental: Rental, admin_user: AdminUser
+    ) -> None:
+        from app.modules.rentals.schemas import RentalUpdate
+        from app.shared.datetime_utils import calculate_reminder_scheduled_utc
+
+        scheduled_at = calculate_reminder_scheduled_utc(
+            active_rental.expiration_date,
+            ReminderStage.H5,
+        )
+        notification = Notification(
+            rental_id=active_rental.id,
+            customer_id=active_rental.customer_id,
+            reminder_stage=ReminderStage.H5,
+            expiration_version=active_rental.expiration_version,
+            scheduled_at=scheduled_at,
+            status=NotificationStatus.QUEUED,
+            attempt_count=0,
+        )
+        db.add(notification)
+        db.flush()
+        outbox_event = OutboxEvent(
+            event_type="notification.send",
+            aggregate_type="notification",
+            aggregate_id=notification.id,
+            payload={"notification_id": str(notification.id)},
+            status=OutboxStatus.PENDING,
+        )
+        db.add(outbox_event)
+        db.flush()
+
+        new_expiration = active_rental.expiration_date + timedelta(days=10)
+        updated = RentalService(db, actor_id=str(admin_user.id)).update_rental(
+            active_rental.id,
+            RentalUpdate(expiration_date=new_expiration),
+        )
+
+        assert updated.expiration_date == new_expiration
+        assert updated.expiration_version == 2
+        assert notification.status == NotificationStatus.CANCELLED
+        assert outbox_event.status == OutboxStatus.PROCESSED
+
+
+def test_customer_update_can_clear_optional_fields(db: Session, customer: Customer) -> None:
+    from app.modules.customers.schemas import CustomerUpdate
+
+    customer.telegram_username = "old_handle"
+    customer.internal_notes = "old note"
+    db.flush()
+
+    updated = CustomerService(db).update_customer(
+        customer.id,
+        CustomerUpdate(telegram_username=None, internal_notes=None),
+    )
+
+    assert updated.telegram_username is None
+    assert updated.internal_notes is None
+
+
 # ─── Duplicate Prevention Tests ───────────────────────────────────────────────
 
 class TestDuplicatePrevention:
@@ -298,6 +357,7 @@ class TestDuplicatePrevention:
 
     def test_not_found_raises_correctly(self, db: Session, admin_user: AdminUser) -> None:
         import uuid
+
         from app.core.exceptions import NotFoundError
         svc = ProductService(db, actor_id=str(admin_user.id))
         with pytest.raises(NotFoundError):

@@ -1,8 +1,8 @@
 """Pydantic schemas for rental creation and derived status presentation."""
 
+import uuid
 from datetime import date, datetime
 from decimal import Decimal
-import uuid
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -16,9 +16,17 @@ from app.shared.money import DEFAULT_CURRENCY
 
 
 class RentalUpdate(BaseModel):
+    customer_id: uuid.UUID | None = None
+    product_id: uuid.UUID | None = None
+    product_variant_id: uuid.UUID | None = None
+    start_date: date | None = None
+    expiration_date: date | None = None
+    duration_value: int | None = Field(default=None, gt=0)
+    duration_unit: DurationUnit | None = None
+    agreed_price: Decimal | None = Field(default=None, ge=0)
+    currency: str | None = None
     status: RentalStatus | None = None
     renewal_model: RenewalModel | None = None
-    internal_notes: str | None = None
 
 
 class RentalCreate(BaseModel):

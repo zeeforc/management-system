@@ -56,6 +56,7 @@ const error = ref('')
 // Modal state
 const showAddRental = ref(false)
 const addingRental = ref(false)
+const editingRentalId = ref<string | null>(null)
 const rentalError = ref('')
 
 const rentalForm = ref({
@@ -63,8 +64,12 @@ const rentalForm = ref({
   product_id: '',
   product_variant_id: '',
   start_date: new Date().toISOString().split('T')[0],
+  expiration_date: '',
+  duration_value: 1,
+  duration_unit: 'MONTHS',
   agreed_price: '',
   renewal_model: 'CONTINUOUS',
+  status: 'ACTIVE',
 })
 
 const customerMap = computed(() => {
@@ -108,9 +113,47 @@ function onVariantChange() {
   const v = availableVariants.value.find((item) => item.id === rentalForm.value.product_variant_id)
   if (v) {
     rentalForm.value.agreed_price = v.default_price
+    rentalForm.value.duration_value = v.duration_value
+    rentalForm.value.duration_unit = v.duration_unit
   } else {
     rentalForm.value.agreed_price = ''
   }
+}
+
+function openAddRental() {
+  editingRentalId.value = null
+  rentalError.value = ''
+  rentalForm.value = {
+    customer_id: '',
+    product_id: '',
+    product_variant_id: '',
+    start_date: new Date().toISOString().split('T')[0],
+    expiration_date: '',
+    duration_value: 1,
+    duration_unit: 'MONTHS',
+    agreed_price: '',
+    renewal_model: 'CONTINUOUS',
+    status: 'ACTIVE',
+  }
+  showAddRental.value = true
+}
+
+function openEditRental(rental: Rental) {
+  editingRentalId.value = rental.id
+  rentalError.value = ''
+  rentalForm.value = {
+    customer_id: rental.customer_id,
+    product_id: rental.product_id,
+    product_variant_id: rental.product_variant_id,
+    start_date: rental.start_date,
+    expiration_date: rental.expiration_date,
+    duration_value: rental.duration_value,
+    duration_unit: rental.duration_unit,
+    agreed_price: rental.agreed_price,
+    renewal_model: rental.renewal_model,
+    status: rental.status,
+  }
+  showAddRental.value = true
 }
 
 async function fetchData() {
@@ -154,21 +197,46 @@ async function submitRental() {
       payload.agreed_price = rentalForm.value.agreed_price
     }
 
-    await api.post('/rentals', payload)
+    if (editingRentalId.value) {
+      await api.patch(`/rentals/${editingRentalId.value}`, {
+        ...payload,
+        expiration_date: rentalForm.value.expiration_date,
+        duration_value: Number(rentalForm.value.duration_value),
+        duration_unit: rentalForm.value.duration_unit,
+        status: rentalForm.value.status,
+      })
+    } else {
+      await api.post('/rentals', payload)
+    }
     showAddRental.value = false
+    editingRentalId.value = null
     rentalForm.value = {
       customer_id: '',
       product_id: '',
       product_variant_id: '',
       start_date: new Date().toISOString().split('T')[0],
+      expiration_date: '',
+      duration_value: 1,
+      duration_unit: 'MONTHS',
       agreed_price: '',
       renewal_model: 'CONTINUOUS',
+      status: 'ACTIVE',
     }
     await fetchData()
   } catch (e: any) {
     rentalError.value = e.response?.data?.detail || e.message || 'Gagal membuat rental.'
   } finally {
     addingRental.value = false
+  }
+}
+
+async function archiveRental(rental: Rental) {
+  if (!window.confirm('Arsipkan data rental ini? Riwayat transaksi dan notifikasinya tetap disimpan.')) return
+  try {
+    await api.post(`/rentals/${rental.id}/archive`)
+    await fetchData()
+  } catch (cause: any) {
+    error.value = cause.response?.data?.detail ?? 'Gagal mengarsipkan rental. Rental aktif harus dibatalkan terlebih dahulu.'
   }
 }
 
@@ -196,7 +264,7 @@ onMounted(fetchData)
         <p class="mt-1 text-sm text-[#1c1c1f]/45">Pantau customer, periode sewa, dan masa aktif.</p>
       </div>
       <button
-        @click="showAddRental = true"
+        @click="openAddRental"
         class="bento-primary inline-flex w-full items-center justify-center gap-2 px-5 py-3 text-sm font-semibold sm:w-auto"
       >
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -237,6 +305,7 @@ onMounted(fetchData)
               <th class="text-left px-6 py-3 font-medium">Periode Sewa</th>
               <th class="text-left px-6 py-3 font-medium">Harga Kesepakatan</th>
               <th class="text-left px-6 py-3 font-medium">Status Efektif</th>
+              <th class="px-6 py-3 font-medium">Aksi</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-[#1c1c1f]/[0.05]">
@@ -264,6 +333,12 @@ onMounted(fetchData)
                   {{ r.warning_state }}
                 </span>
               </td>
+              <td class="px-6 py-4">
+                <div class="flex justify-end gap-2">
+                  <button class="rounded-full border border-[#1c1c1f]/10 px-3 py-1.5 text-xs font-semibold" @click="openEditRental(r)">Edit</button>
+                  <button class="rounded-full border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-700" @click="archiveRental(r)">Arsipkan</button>
+                </div>
+              </td>
             </tr>
           </tbody>
         </table>
@@ -285,6 +360,10 @@ onMounted(fetchData)
             <span>{{ formatDate(r.start_date) }} - {{ formatDate(r.expiration_date) }}</span>
             <span class="font-semibold text-slate-800">{{ r.currency }} {{ Number(r.agreed_price).toLocaleString('id-ID') }}</span>
           </div>
+          <div class="grid grid-cols-2 gap-2 pt-1">
+            <button class="rounded-full border border-[#1c1c1f]/10 px-3 py-2 text-xs font-semibold" @click="openEditRental(r)">Edit</button>
+            <button class="rounded-full border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-700" @click="archiveRental(r)">Arsipkan</button>
+          </div>
         </article>
       </div>
     </div>
@@ -295,7 +374,7 @@ onMounted(fetchData)
       <div v-if="showAddRental" class="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/35 p-0 backdrop-blur-md sm:items-center sm:p-4" @click.self="showAddRental = false">
         <div class="bento-modal max-h-[92dvh] w-full overflow-y-auto rounded-t-[28px] sm:max-h-[calc(100dvh-2rem)] sm:max-w-md sm:rounded-[28px]">
           <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-            <h3 class="font-semibold text-gray-900">Tambah Rental Baru</h3>
+            <h3 class="font-semibold text-gray-900">{{ editingRentalId ? 'Edit Rental' : 'Tambah Rental Baru' }}</h3>
             <button @click="showAddRental = false" class="text-gray-400 hover:text-gray-600">
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -368,6 +447,44 @@ onMounted(fetchData)
                   v-model="rentalForm.renewal_model"
                   class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 >
+                  <option value="CONTINUOUS">Continuous</option>
+                  <option value="IMMEDIATE">Immediate</option>
+                </select>
+              </div>
+              <div v-if="editingRentalId">
+                <label class="block text-sm font-medium text-gray-700 mb-1">Tanggal Berakhir *</label>
+                <input v-model="rentalForm.expiration_date" type="date" required
+                  class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              </div>
+            </div>
+
+            <div v-if="editingRentalId" class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Durasi</label>
+                <input v-model.number="rentalForm.duration_value" type="number" min="1" required
+                  class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Satuan Durasi</label>
+                <select v-model="rentalForm.duration_unit" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                  <option value="DAYS">Hari</option>
+                  <option value="WEEKS">Minggu</option>
+                  <option value="MONTHS">Bulan</option>
+                  <option value="YEARS">Tahun</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Status</label>
+                <select v-model="rentalForm.status" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                  <option value="ACTIVE">Aktif</option>
+                  <option value="SCHEDULED">Terjadwal</option>
+                  <option value="CANCELLED">Dibatalkan</option>
+                  <option v-if="rentalForm.status === 'EXPIRED'" value="EXPIRED">Expired</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Model Renewal</label>
+                <select v-model="rentalForm.renewal_model" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
                   <option value="CONTINUOUS">Continuous</option>
                   <option value="IMMEDIATE">Immediate</option>
                 </select>

@@ -44,22 +44,27 @@ class TelegramService:
     def format_admin_dashboard(self) -> str:
         summary: DashboardSummaryRead = self.report_service.get_dashboard_summary()
         return (
-            f"📊 <b>Dashboard Rental Monitoring ({summary.wib_reference_date})</b>\n\n"
-            f"• Produk: <code>{summary.total_products}</code> "
-            f"(varian aktif: <code>{summary.total_active_variants}</code>)\n"
-            f"• Pelanggan: <code>{summary.total_customers}</code>\n"
-            f"• Rental aktif: <code>{summary.active_rentals}</code>\n"
-            f"• Jatuh tempo H-5/H-3/H-1: "
+            f"📊 <b>RINGKASAN BISNIS</b>\n"
+            f"<i>Data per {summary.wib_reference_date}</i>\n\n"
+            f"📦 <b>Katalog</b>\n"
+            f"   Produk: <code>{summary.total_products}</code> · "
+            f"Varian aktif: <code>{summary.total_active_variants}</code>\n"
+            f"👥 <b>Pelanggan</b>\n"
+            f"   Total: <code>{summary.total_customers}</code>\n"
+            f"🗓 <b>Masa sewa</b>\n"
+            f"   Aktif: <code>{summary.active_rentals}</code>\n"
+            f"   Jatuh tempo H-5 / H-3 / H-1: "
             f"<code>{summary.rentals_expiring_in_5_days}/"
             f"{summary.rentals_expiring_in_3_days}/"
             f"{summary.rentals_expiring_tomorrow}</code>\n"
-            f"• Expired: <code>{summary.expired_rentals}</code>\n"
-            f"• Renewal pending: <code>{summary.pending_renewal_requests}</code>\n"
-            f"• Verifikasi pembayaran pending: "
+            f"   Expired: <code>{summary.expired_rentals}</code>\n\n"
+            f"🔄 <b>Renewal & pembayaran</b>\n"
+            f"   Permintaan pending: <code>{summary.pending_renewal_requests}</code>\n"
+            f"   Menunggu verifikasi: "
             f"<code>{summary.pending_payment_verifications}</code>\n"
-            f"• Pembayaran terverifikasi: "
-            f"<code>{escape(format_idr(summary.verified_payment_totals))}</code>\n"
-            f"• Notifikasi gagal/ambigu: <code>{summary.failed_notifications}</code>"
+            f"   Terverifikasi: "
+            f"<code>{escape(format_idr(summary.verified_payment_totals))}</code>\n\n"
+            f"🔔 Notifikasi perlu perhatian: <code>{summary.failed_notifications}</code>"
         )
 
     def format_products(self, page: int = 1) -> str:
@@ -68,11 +73,11 @@ class TelegramService:
         products = list(self.db.scalars(stmt.offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE)).all())
         if not products:
             return "Belum ada produk pada halaman ini."
-        lines = [f"📦 <b>Produk</b> · halaman {page} ({total} total)\n"]
+        lines = [f"📦 <b>KATALOG PRODUK</b>\n<i>Halaman {page} · {total} produk</i>\n"]
         for product in products:
             lines.append(
-                f"<b>{escape(product.name)}</b> · {escape(product.status)} "
-                f"· {escape(product.category)}"
+                f"▫️ <b>{escape(product.name)}</b> · {escape(product.status)}\n"
+                f"   Kategori: {escape(product.category)}"
             )
             variants = list(
                 self.db.scalars(
@@ -86,10 +91,11 @@ class TelegramService:
             )
             for variant in variants:
                 lines.append(
-                    f"  - {escape(variant.name)}: "
+                    f"   └ {escape(variant.name)} · "
                     f"{variant.duration_value} {escape(variant.duration_unit.lower())}, "
                     f"{escape(format_idr(variant.default_price))}"
                 )
+            lines.append("")
         return "\n".join(lines) + self._page_hint(page, total)
 
     def format_rentals(
@@ -137,13 +143,19 @@ class TelegramService:
             if expired
             else (f"Sewa jatuh tempo H-{expiring_days}" if expiring_days else "Sewa aktif")
         )
-        lines = [f"🗓 <b>{title}</b> · halaman {page} ({total} total)\n"]
+        lines = [f"🗓 <b>{title.upper()}</b>\n<i>Halaman {page} · {total} rental</i>\n"]
         for rental, customer, product, variant in rows:
+            username = (
+                f"@{escape(customer.telegram_username)}"
+                if customer.telegram_username
+                else "username belum dicatat"
+            )
             lines.append(
-                f"• <b>{escape(customer.display_name)}</b> — "
-                f"{escape(product.name)} / {escape(variant.name)}\n"
-                f"  Berakhir {rental.expiration_date:%d-%m-%Y} · "
-                f"{escape(format_idr(rental.agreed_price))}"
+                f"👤 <b>{escape(customer.display_name)}</b>\n"
+                f"   Telegram: {username}\n"
+                f"🎬 {escape(product.name)} · {escape(variant.name)}\n"
+                f"   Berakhir: <b>{rental.expiration_date:%d %b %Y}</b>\n"
+                f"   Harga: {escape(format_idr(rental.agreed_price))}\n"
             )
         return "\n".join(lines) + self._page_hint(page, total)
 
@@ -171,15 +183,16 @@ class TelegramService:
         )
         if not customers:
             return "Pelanggan tidak ditemukan."
-        lines = [f"👤 <b>Pelanggan</b> · halaman {page} ({total} cocok)\n"]
+        lines = [f"👥 <b>HASIL PENCARIAN PELANGGAN</b>\n<i>Halaman {page} · {total} cocok</i>\n"]
         for customer in customers:
             username = (
                 f"@{escape(customer.telegram_username)}" if customer.telegram_username else "—"
             )
             chat_state = "terhubung" if customer.telegram_chat_id is not None else "belum terhubung"
             lines.append(
-                f"• <b>{escape(customer.display_name)}</b> · {escape(customer.status)}\n"
-                f"  Telegram: {username} · {chat_state}"
+                f"👤 <b>{escape(customer.display_name)}</b> · {escape(customer.status)}\n"
+                f"   Username: {username}\n"
+                f"   Akun Telegram: {chat_state}\n"
             )
         return "\n".join(lines) + self._page_hint(page, total)
 
