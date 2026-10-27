@@ -6,10 +6,16 @@ from html import escape
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, with_loader_criteria
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.core.exceptions import BusinessRuleError
 from app.core.security import hash_token
-from app.modules.customers.models import Customer, NotificationConsent, TelegramLinkToken
+from app.modules.customers.models import (
+    Customer,
+    NotificationConsent,
+    StoreFeedback,
+    TelegramLinkToken,
+)
 from app.modules.notifications.models import NotificationResponse
 from app.modules.products.models import Product, ProductVariant
 from app.modules.renewals.models import RenewalOffer, RentalRenewal
@@ -40,6 +46,21 @@ class TelegramService:
     def __init__(self, db: Session) -> None:
         self.db = db
         self.report_service = ReportService(db)
+
+    def linked_customer_display_name(
+        self,
+        telegram_user_id: int,
+        telegram_chat_id: int,
+    ) -> str | None:
+        customer = self.db.scalar(
+            select(Customer).where(
+                Customer.telegram_user_id == telegram_user_id,
+                Customer.telegram_chat_id == telegram_chat_id,
+                Customer.archived_at.is_(None),
+                Customer.status == CustomerStatus.ACTIVE,
+            )
+        )
+        return customer.display_name if customer is not None else None
 
     def format_admin_dashboard(self) -> str:
         summary: DashboardSummaryRead = self.report_service.get_dashboard_summary()
@@ -165,7 +186,7 @@ class TelegramService:
         if not search:
             return "Gunakan <code>/customer nama-atau-username [halaman]</code>."
 
-        conditions = [
+        conditions: list[ColumnElement[bool]] = [
             Customer.display_name.ilike(f"%{search}%"),
             Customer.telegram_username.ilike(f"%{search.lstrip('@')}%"),
         ]
@@ -283,6 +304,37 @@ class TelegramService:
             )
         self.db.commit()
         return True
+
+    def create_store_feedback(
+        self,
+        telegram_user_id: int,
+        telegram_chat_id: int,
+        rating: int,
+        message: str | None,
+    ) -> tuple[uuid.UUID, str]:
+        customer = self.db.scalar(
+            select(Customer).where(
+                Customer.telegram_user_id == telegram_user_id,
+                Customer.telegram_chat_id == telegram_chat_id,
+                Customer.archived_at.is_(None),
+                Customer.status == CustomerStatus.ACTIVE,
+            )
+        )
+        if customer is None:
+            raise BusinessRuleError("Tautkan akun pelanggan terlebih dahulu melalui /start link_…")
+        if not 1 <= rating <= 5:
+            raise BusinessRuleError("Rating harus antara 1 dan 5.")
+
+        feedback = StoreFeedback(
+            customer_id=customer.id,
+            customer_display_name=customer.display_name,
+            rating=rating,
+            message=message.strip() or None if message else None,
+        )
+        self.db.add(feedback)
+        self.db.commit()
+        self.db.refresh(feedback)
+        return feedback.id, customer.display_name
 
     def respond_to_offer(
         self,

@@ -23,7 +23,10 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.core.exceptions import BusinessRuleError
 from app.db.session import SessionLocal
-from app.modules.notifications.delivery import build_reminder_message
+from app.modules.notifications.delivery import (
+    build_admin_reminder_message,
+    build_reminder_message,
+)
 from app.modules.notifications.models import Notification, NotificationAttempt, OutboxEvent
 from app.modules.rentals.models import Rental
 from app.shared.datetime_utils import current_wib_date, utc_now
@@ -52,6 +55,33 @@ async def _send_message(
             reply_markup=reply_markup,
         )
     return message.message_id
+
+
+async def _send_admin_reminders(text: str) -> None:
+    if not settings.TELEGRAM_ADMIN_USER_IDS:
+        return
+    try:
+        async with Bot(token=settings.TELEGRAM_BOT_TOKEN) as bot:
+            for admin_id in settings.TELEGRAM_ADMIN_USER_IDS:
+                try:
+                    await bot.send_message(
+                        chat_id=admin_id,
+                        text=text,
+                        parse_mode="HTML",
+                    )
+                except TelegramAPIError as exc:
+                    logger.warning(
+                        "Could not deliver sensitive reminder details to Telegram admin %s (%s). "
+                        "The customer reminder delivery will continue.",
+                        admin_id,
+                        type(exc).__name__,
+                    )
+    except TelegramAPIError as exc:
+        logger.warning(
+            "Could not initialize Telegram delivery for admin reminder details (%s). "
+            "The customer reminder delivery will continue.",
+            type(exc).__name__,
+        )
 
 
 def _finish_attempt(
@@ -138,6 +168,11 @@ def dispatch_reminder_task(notification_id: str) -> dict[str, str]:
 
         try:
             chat_id, text, keyboard = build_reminder_message(db, identifier)
+            admin_text = (
+                build_admin_reminder_message(db, identifier)
+                if settings.TELEGRAM_ADMIN_USER_IDS
+                else None
+            )
         except BusinessRuleError as exc:
             rental = db.get(Rental, notification.rental_id)
             if (
@@ -232,4 +267,6 @@ def dispatch_reminder_task(notification_id: str) -> dict[str, str]:
         AttemptResultStatus.SUCCESS,
         message_id=message_id,
     )
+    if admin_text is not None:
+        asyncio.run(_send_admin_reminders(admin_text))
     return {"notification_id": notification_id, "status": "sent"}

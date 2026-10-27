@@ -10,6 +10,7 @@ interface InstallPromptEvent extends Event {
 const { needRefresh, updateServiceWorker } = useRegisterSW()
 const installPrompt = ref<InstallPromptEvent | null>(null)
 const installError = ref('')
+const showInstallPrompt = ref(true)
 const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent)
 const isStandalone = ref(
   window.matchMedia('(display-mode: standalone)').matches ||
@@ -18,7 +19,9 @@ const isStandalone = ref(
 
 function captureInstallPrompt(event: Event) {
   event.preventDefault()
-  installPrompt.value = event as InstallPromptEvent
+  if (showInstallPrompt.value && !isStandalone.value) {
+    installPrompt.value = event as InstallPromptEvent
+  }
 }
 
 function markInstalled() {
@@ -40,20 +43,27 @@ async function installApp() {
   }
 }
 
+let installPromptTimeout: number | undefined
+
 onMounted(() => {
   window.addEventListener('beforeinstallprompt', captureInstallPrompt)
   window.addEventListener('appinstalled', markInstalled)
+  installPromptTimeout = window.setTimeout(() => {
+    showInstallPrompt.value = false
+    installPrompt.value = null
+  }, 60_000)
 })
 
 onUnmounted(() => {
   window.removeEventListener('beforeinstallprompt', captureInstallPrompt)
   window.removeEventListener('appinstalled', markInstalled)
+  window.clearTimeout(installPromptTimeout)
 })
 </script>
 
 <template>
   <aside
-    v-if="needRefresh || (!isStandalone && (installPrompt || isIos))"
+    v-if="needRefresh || (showInstallPrompt && !isStandalone && (installPrompt || isIos))"
     class="fixed bottom-4 left-4 right-4 z-50 mx-auto flex max-w-md items-center justify-between gap-4 rounded-2xl bg-[#1c1c1f] px-5 py-4 text-white shadow-2xl"
     aria-live="polite"
   >

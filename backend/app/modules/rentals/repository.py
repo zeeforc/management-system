@@ -3,6 +3,7 @@
 import uuid
 
 from sqlalchemy import func, select
+from sqlalchemy.engine import Row
 from sqlalchemy.orm import Session
 
 from app.modules.customers.models import Customer
@@ -15,7 +16,10 @@ class RentalRepository:
     def __init__(self, db: Session) -> None:
         self.db = db
 
-    def list_rentals(self, params: PaginationParams) -> tuple[list[tuple], int]:
+    def list_rentals(
+        self,
+        params: PaginationParams,
+    ) -> tuple[list[Row[Rental, str, str, str]], int]:
         base_stmt = select(Rental).where(Rental.archived_at.is_(None))
         total = self.db.scalar(select(func.count()).select_from(base_stmt.subquery())) or 0
         stmt = (

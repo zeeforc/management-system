@@ -2,12 +2,12 @@
 
 from fastapi.testclient import TestClient
 
-from app.db.base import Base
 import app.db.model_registry  # noqa: F401
+from app.db.base import Base
 
 
 def test_all_required_tables_registered_in_metadata() -> None:
-    """Verify all 16 tables from Section 6 of built-rules.md are registered in SQLAlchemy metadata."""
+    """Verify all required tables are registered in SQLAlchemy metadata."""
     expected_tables = {
         "admin_users",
         "roles",
@@ -17,6 +17,7 @@ def test_all_required_tables_registered_in_metadata() -> None:
         "customers",
         "notification_consents",
         "telegram_link_tokens",
+        "store_feedback",
         "rentals",
         "rental_renewals",
         "renewal_offers",

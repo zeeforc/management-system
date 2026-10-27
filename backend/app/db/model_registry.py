@@ -2,7 +2,12 @@
 
 from app.modules.audit.models import AuditLog, SystemSetting
 from app.modules.auth.models import AdminUser, Role, UserRole
-from app.modules.customers.models import Customer, NotificationConsent, TelegramLinkToken
+from app.modules.customers.models import (
+    Customer,
+    NotificationConsent,
+    StoreFeedback,
+    TelegramLinkToken,
+)
 from app.modules.notifications.models import (
     IdempotencyRecord,
     Notification,
@@ -12,8 +17,8 @@ from app.modules.notifications.models import (
 )
 from app.modules.payments.models import Payment
 from app.modules.products.models import Product, ProductVariant
-from app.modules.rentals.models import Rental
 from app.modules.renewals.models import RenewalOffer, RentalRenewal
+from app.modules.rentals.models import Rental
 
 __all__ = [
     "AdminUser",
@@ -24,6 +29,7 @@ __all__ = [
     "Customer",
     "NotificationConsent",
     "TelegramLinkToken",
+    "StoreFeedback",
     "Rental",
     "RentalRenewal",
     "RenewalOffer",

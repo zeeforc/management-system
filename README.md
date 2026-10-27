@@ -131,9 +131,11 @@ The migration service runs before API/bot/worker/scheduler startup. The `seed` p
 
 For production, set `CREDENTIALS_ENCRYPTION_KEY` in the private `.env` to a new key generated with `python -c "import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"`. Keep a secure backup of this key separate from the database backup: rental account email, profile, and PIN values are encrypted with it and cannot be recovered if it is lost or changed.
 
+Reminder messages sent to customers do not include account credentials. Configured Telegram admins receive a separate private reminder containing the rental details and credentials; each admin must open the bot and send `/start` before the bot can deliver private messages. Admins can use `/admin` for interactive product, variant, customer, and rental creation. Customers with a linked Telegram account can use `/rating` to submit a 1–5 rating and optional feedback. Set `TELEGRAM_FEEDBACK_CHANNEL_ID` after creating the destination channel, and add the bot as a channel administrator to publish feedback. Feedback is stored in the database even while the channel is not configured.
+
 ### Install the web app on mobile
 
-The Vue frontend is installable as a Progressive Web App (PWA) and requires HTTPS in production. On Android, open the site in a supported browser and tap **Install** when prompted (or use the browser menu). On iPhone/iPad, open it in Safari, tap **Share**, then **Add to Home Screen**. The service worker caches only the app shell and built assets; API responses and customer data are not cached for offline use.
+The Vue frontend is installable as a Progressive Web App (PWA) and requires HTTPS in production. The in-app install prompt is shown for the first minute after opening the site. On Android, tap **Install** during that time (or use the browser menu). On iPhone/iPad, open it in Safari, tap **Share**, then **Add to Home Screen**. The service worker caches only the app shell and built assets; API responses and customer data are not cached for offline use.
 
 ### Existing CloudPanel VPS
 

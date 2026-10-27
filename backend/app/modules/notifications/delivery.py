@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.encryption import decrypt_credential
 from app.core.exceptions import BusinessRuleError
 from app.db.session import SessionLocal
 from app.modules.customers.models import Customer, NotificationConsent
@@ -162,6 +163,46 @@ def build_reminder_message(
             keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
 
     return customer.telegram_chat_id, text, keyboard
+
+
+def build_admin_reminder_message(
+    db: Session,
+    notification_id: uuid.UUID,
+) -> str:
+    notification = db.get(Notification, notification_id)
+    if notification is None:
+        raise BusinessRuleError("Notification no longer exists.")
+    rental = db.get(Rental, notification.rental_id)
+    customer = db.get(Customer, notification.customer_id)
+    product = db.get(Product, rental.product_id) if rental is not None else None
+    variant = db.get(ProductVariant, rental.product_variant_id) if rental is not None else None
+    if rental is None or customer is None or product is None or variant is None:
+        raise BusinessRuleError("Rental, customer, product, or variant no longer exists.")
+
+    username = (
+        f"@{escape(customer.telegram_username)}"
+        if customer.telegram_username
+        else "Belum dicatat"
+    )
+    account_email = decrypt_credential(rental.account_email_encrypted) or "—"
+    profile = decrypt_credential(rental.profile_encrypted) or "—"
+    pin = decrypt_credential(rental.pin_encrypted) or "—"
+    duration_unit = DURATION_LABELS[str(rental.duration_unit)]
+    return (
+        f"🔐 <b>DETAIL REMINDER ADMIN · "
+        f"{escape(str(notification.reminder_stage))}</b>\n\n"
+        f"👤 Customer: <b>{escape(customer.display_name)}</b>\n"
+        f"↗️ Username: {username}\n"
+        f"📦 Produk: <b>{escape(product.name)}</b>\n"
+        f"▫️ Varian: <b>{escape(variant.name)}</b>\n"
+        f"⏱ Durasi: <b>{rental.duration_value} {duration_unit}</b>\n"
+        f"📅 Periode: {rental.start_date:%d-%m-%Y} s.d. "
+        f"{rental.expiration_date:%d-%m-%Y}\n"
+        f"💳 Harga: <b>{escape(format_idr(rental.agreed_price))}</b>\n\n"
+        f"✉️ Email akun: <code>{escape(account_email)}</code>\n"
+        f"👥 Profile: <code>{escape(profile)}</code>\n"
+        f"🔑 PIN: <code>{escape(pin)}</code>"
+    )
 
 
 async def send_telegram_reminder(notification_id: uuid.UUID) -> int:

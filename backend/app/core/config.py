@@ -58,6 +58,7 @@ class Settings(BaseSettings):
 
     TELEGRAM_BOT_TOKEN: str = "0000000000:AAExampleBotTokenReplaceBeforeRunningBot"
     TELEGRAM_ADMIN_USER_IDS: list[int] = [123456789]
+    TELEGRAM_FEEDBACK_CHANNEL_ID: str | None = None
     TELEGRAM_LINK_TOKEN_EXPIRE_MINUTES: int = 30
 
     DEFAULT_REMINDER_SEND_HOUR_WIB: int = 9
