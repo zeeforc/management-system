@@ -129,6 +129,12 @@ docker compose ps
 
 The migration service runs before API/bot/worker/scheduler startup. The `seed` profile creates the initial OWNER account idempotently. Keep the `.env` file private and do not commit it. Never run `docker compose down -v` on a production host.
 
+For production, set `CREDENTIALS_ENCRYPTION_KEY` in the private `.env` to a new key generated with `python -c "import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"`. Keep a secure backup of this key separate from the database backup: rental account email, profile, and PIN values are encrypted with it and cannot be recovered if it is lost or changed.
+
+### Install the web app on mobile
+
+The Vue frontend is installable as a Progressive Web App (PWA) and requires HTTPS in production. On Android, open the site in a supported browser and tap **Install** when prompted (or use the browser menu). On iPhone/iPad, open it in Safari, tap **Share**, then **Add to Home Screen**. The service worker caches only the app shell and built assets; API responses and customer data are not cached for offline use.
+
 ### Existing CloudPanel VPS
 
 Do not publish this stack on ports 80/443 when CloudPanel already serves other sites. Create a separate CloudPanel site for a dedicated subdomain, point its DNS A record to the VPS, and configure its HTTPS virtual host to reverse-proxy to `http://127.0.0.1:18080`. In the private `.env`, set `DOMAIN` to that subdomain, `CADDYFILE_PATH=./infra/Caddyfile.cloudpanel`, `CADDY_HTTP_BIND=127.0.0.1:18080`, and `CADDY_HTTPS_BIND=127.0.0.1:18443`. The API, PostgreSQL, and Redis are reachable only inside the Compose network and do not need host ports. The CloudPanel Caddyfile serves HTTP only because CloudPanel terminates TLS. Use a unique Compose project name (for example, `-p management-system`) so container and network names remain isolated. Do not edit or restart existing CloudPanel sites or other Compose projects as part of this setup.

@@ -3,6 +3,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from cryptography.fernet import Fernet
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
@@ -28,6 +29,9 @@ class Settings(BaseSettings):
     SECRET_KEY: str = Field(
         default="dev-secret-key-for-local-development-only-at-least-32-chars",
         min_length=16,
+    )
+    CREDENTIALS_ENCRYPTION_KEY: str = (
+        "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
     )
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
@@ -62,6 +66,13 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_runtime_configuration(self) -> "Settings":
+        try:
+            Fernet(self.CREDENTIALS_ENCRYPTION_KEY.encode("ascii"))
+        except (UnicodeEncodeError, ValueError) as exc:
+            raise ValueError(
+                "CREDENTIALS_ENCRYPTION_KEY must be a URL-safe base64 Fernet key."
+            ) from exc
+
         if not self.DATABASE_URL:
             self.DATABASE_URL = URL.create(
                 "postgresql+psycopg",
@@ -81,6 +92,8 @@ class Settings(BaseSettings):
                 "TELEGRAM_BOT_TOKEN": self.TELEGRAM_BOT_TOKEN
                 == "0000000000:AAExampleBotTokenReplaceBeforeRunningBot",
                 "TELEGRAM_ADMIN_USER_IDS": self.TELEGRAM_ADMIN_USER_IDS == [123456789],
+                "CREDENTIALS_ENCRYPTION_KEY": self.CREDENTIALS_ENCRYPTION_KEY
+                == "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
             }
             if self.DEBUG:
                 insecure_values["DEBUG"] = True
@@ -92,6 +105,10 @@ class Settings(BaseSettings):
                 )
             if len(self.SECRET_KEY) < 32:
                 raise ValueError("SECRET_KEY must be at least 32 characters in production.")
+            if len(self.CREDENTIALS_ENCRYPTION_KEY) != 44:
+                raise ValueError(
+                    "CREDENTIALS_ENCRYPTION_KEY must be a URL-safe base64 Fernet key."
+                )
 
         return self
 

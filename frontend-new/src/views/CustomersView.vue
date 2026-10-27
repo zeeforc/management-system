@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import api from '@/lib/api'
 import AppLayout from '@/components/AppLayout.vue'
 
@@ -33,6 +33,8 @@ interface Customer {
 
 const customers = ref<Customer[]>([])
 const products = ref<Product[]>([])
+const productsLoaded = ref(false)
+const loadingProducts = ref(false)
 const loading = ref(true)
 const error = ref('')
 
@@ -59,6 +61,7 @@ const linkExpiresAt = ref('')
 const linkCustomerName = ref('')
 const linkError = ref('')
 const creatingLink = ref(false)
+let productsRequest: Promise<void> | null = null
 
 const availableVariants = computed(() => {
   if (!customerForm.value.product_id) return []
@@ -69,6 +72,26 @@ const availableVariants = computed(() => {
 function onProductChange() {
   customerForm.value.product_variant_id = ''
   customerForm.value.agreed_price = ''
+}
+
+async function loadProductsForRental() {
+  if (productsLoaded.value) return
+  if (productsRequest) return productsRequest
+  loadingProducts.value = true
+  productsRequest = api.get('/products?page=1&page_size=100')
+    .then((response) => {
+      products.value = response.data.items
+      productsLoaded.value = true
+    })
+    .catch((cause: any) => {
+      customerError.value = cause.response?.data?.detail ?? 'Gagal memuat daftar produk.'
+      throw cause
+    })
+    .finally(() => {
+      loadingProducts.value = false
+      productsRequest = null
+    })
+  return productsRequest
 }
 
 function onVariantChange() {
@@ -102,12 +125,8 @@ async function fetchCustomers() {
   loading.value = true
   error.value = ''
   try {
-    const [res, prodRes] = await Promise.all([
-      api.get('/customers?page=1&page_size=100'),
-      api.get('/products?page=1&page_size=100'),
-    ])
+    const res = await api.get('/customers?page=1&page_size=100')
     customers.value = res.data.items
-    products.value = prodRes.data.items
   } catch (e: any) {
     error.value = e.response?.data?.detail ?? 'Gagal memuat customer.'
   } finally {
@@ -245,6 +264,12 @@ function formatDate(iso: string) {
 }
 
 onMounted(fetchCustomers)
+watch(
+  () => customerForm.value.assign_rental,
+  (enabled) => {
+    if (enabled) void loadProductsForRental().catch(() => undefined)
+  },
+)
 </script>
 
 <template>

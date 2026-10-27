@@ -1,10 +1,10 @@
 """SQLAlchemy model for rentals with transaction snapshots and indexes (Section 6.4 & 7)."""
 
+import uuid
 from datetime import date
 from decimal import Decimal
-import uuid
 
-from sqlalchemy import CheckConstraint, Date, ForeignKey, Index, Integer, Numeric, String
+from sqlalchemy import CheckConstraint, Date, ForeignKey, Index, Integer, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -46,6 +46,9 @@ class Rental(Base, UUIDPrimaryKeyMixin, TimestampMixin, ArchivableMixin):
     duration_value: Mapped[int] = mapped_column(Integer, nullable=False)
     duration_unit: Mapped[DurationUnit] = mapped_column(String(32), nullable=False)
     agreed_price: Mapped[Decimal] = mapped_column(Numeric(15, 2), nullable=False)
+    account_email_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    profile_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pin_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     currency: Mapped[str] = mapped_column(String(8), default=DEFAULT_CURRENCY, nullable=False)
     status: Mapped[RentalStatus] = mapped_column(
         String(32),

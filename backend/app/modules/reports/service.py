@@ -10,10 +10,18 @@ from app.modules.customers.models import Customer
 from app.modules.notifications.models import Notification
 from app.modules.payments.models import Payment
 from app.modules.products.models import Product, ProductVariant
-from app.modules.rentals.models import Rental
 from app.modules.renewals.models import RentalRenewal
-from app.modules.reports.schemas import DashboardSummaryRead
-from app.shared.datetime_utils import current_wib_date
+from app.modules.rentals.models import Rental
+from app.modules.reports.schemas import (
+    DashboardOverviewRead,
+    DashboardRentalPreviewRead,
+    DashboardSummaryRead,
+)
+from app.shared.datetime_utils import (
+    current_wib_date,
+    days_until_expiration,
+    derive_effective_rental_status,
+)
 from app.shared.enums import (
     NotificationStatus,
     PaymentStatus,
@@ -28,132 +36,128 @@ class ReportService:
         self.db = db
 
     def get_dashboard_summary(self) -> DashboardSummaryRead:
-        """Compute all 12 dashboard metrics using database-side aggregation."""
+        """Compute dashboard metrics in one database round trip."""
         today = current_wib_date()
-
-        total_products = (
-            self.db.scalar(
-                select(func.count(Product.id)).where(Product.archived_at.is_(None))
-            )
-            or 0
-        )
-        total_active_variants = (
-            self.db.scalar(
-                select(func.count(ProductVariant.id)).where(
-                    ProductVariant.archived_at.is_(None),
-                    ProductVariant.status == VariantStatus.ACTIVE,
-                )
-            )
-            or 0
-        )
-        total_customers = (
-            self.db.scalar(
-                select(func.count(Customer.id)).where(Customer.archived_at.is_(None))
-            )
-            or 0
-        )
-
         non_cancelled_rentals = (
             Rental.archived_at.is_(None),
             Rental.status != RentalStatus.CANCELLED,
         )
 
-        active_rentals = (
-            self.db.scalar(
-                select(func.count(Rental.id)).where(
-                    *non_cancelled_rentals,
-                    Rental.start_date <= today,
-                    Rental.expiration_date >= today,
-                )
-            )
-            or 0
-        )
-        rentals_expiring_in_5_days = (
-            self.db.scalar(
-                select(func.count(Rental.id)).where(
-                    *non_cancelled_rentals,
-                    Rental.expiration_date == today + timedelta(days=5),
-                )
-            )
-            or 0
-        )
-        rentals_expiring_in_3_days = (
-            self.db.scalar(
-                select(func.count(Rental.id)).where(
-                    *non_cancelled_rentals,
-                    Rental.expiration_date == today + timedelta(days=3),
-                )
-            )
-            or 0
-        )
-        rentals_expiring_tomorrow = (
-            self.db.scalar(
-                select(func.count(Rental.id)).where(
-                    *non_cancelled_rentals,
-                    Rental.expiration_date == today + timedelta(days=1),
-                )
-            )
-            or 0
-        )
-        expired_rentals = (
-            self.db.scalar(
-                select(func.count(Rental.id)).where(
-                    *non_cancelled_rentals,
-                    Rental.expiration_date < today,
-                )
-            )
-            or 0
-        )
+        def count(model_column, *criteria):
+            return select(func.count(model_column)).where(*criteria).scalar_subquery()
 
-        pending_renewal_requests = (
-            self.db.scalar(
-                select(func.count(RentalRenewal.id)).where(
-                    RentalRenewal.status == RenewalStatus.PENDING
-                )
+        statement = select(
+            count(Product.id, Product.archived_at.is_(None)).label("total_products"),
+            count(
+                ProductVariant.id,
+                ProductVariant.archived_at.is_(None),
+                ProductVariant.status == VariantStatus.ACTIVE,
+            ).label("total_active_variants"),
+            count(Customer.id, Customer.archived_at.is_(None)).label("total_customers"),
+            count(
+                Rental.id,
+                *non_cancelled_rentals,
+                Rental.start_date <= today,
+                Rental.expiration_date >= today,
+            ).label("active_rentals"),
+            count(
+                Rental.id,
+                *non_cancelled_rentals,
+                Rental.expiration_date == today + timedelta(days=5),
+            ).label("rentals_expiring_in_5_days"),
+            count(
+                Rental.id,
+                *non_cancelled_rentals,
+                Rental.expiration_date == today + timedelta(days=3),
+            ).label("rentals_expiring_in_3_days"),
+            count(
+                Rental.id,
+                *non_cancelled_rentals,
+                Rental.expiration_date == today + timedelta(days=1),
+            ).label("rentals_expiring_tomorrow"),
+            count(
+                Rental.id,
+                *non_cancelled_rentals,
+                Rental.expiration_date < today,
+            ).label("expired_rentals"),
+            count(
+                RentalRenewal.id,
+                RentalRenewal.status == RenewalStatus.PENDING,
+            ).label("pending_renewal_requests"),
+            count(Payment.id, Payment.status == PaymentStatus.PENDING).label(
+                "pending_payment_verifications"
+            ),
+            select(
+                func.coalesce(func.sum(Payment.amount), Decimal("0.00"))
             )
-            or 0
-        )
-        pending_payment_verifications = (
-            self.db.scalar(
-                select(func.count(Payment.id)).where(Payment.status == PaymentStatus.PENDING)
-            )
-            or 0
-        )
-        verified_payment_totals = self.db.scalar(
-            select(func.coalesce(func.sum(Payment.amount), Decimal("0.00"))).where(
+            .where(
                 Payment.status == PaymentStatus.PAID,
                 Payment.verified_at.is_not(None),
             )
-        ) or Decimal("0.00")
-
-        failed_notifications = (
-            self.db.scalar(
-                select(func.count(Notification.id)).where(
-                    Notification.status.in_(
-                        [
-                            NotificationStatus.FAILED_RETRYABLE,
-                            NotificationStatus.FAILED_PERMANENT,
-                            NotificationStatus.AMBIGUOUS,
-                        ]
+            .scalar_subquery()
+            .label("verified_payment_totals"),
+            count(
+                Notification.id,
+                Notification.status.in_(
+                    (
+                        NotificationStatus.FAILED_RETRYABLE,
+                        NotificationStatus.FAILED_PERMANENT,
+                        NotificationStatus.AMBIGUOUS,
                     )
-                )
-            )
-            or 0
+                ),
+            ).label("failed_notifications"),
         )
+        row = self.db.execute(statement).one()
 
         return DashboardSummaryRead(
             wib_reference_date=today,
-            total_products=int(total_products),
-            total_active_variants=int(total_active_variants),
-            total_customers=int(total_customers),
-            active_rentals=int(active_rentals),
-            rentals_expiring_in_5_days=int(rentals_expiring_in_5_days),
-            rentals_expiring_in_3_days=int(rentals_expiring_in_3_days),
-            rentals_expiring_tomorrow=int(rentals_expiring_tomorrow),
-            expired_rentals=int(expired_rentals),
-            pending_renewal_requests=int(pending_renewal_requests),
-            pending_payment_verifications=int(pending_payment_verifications),
-            verified_payment_totals=Decimal(str(verified_payment_totals)),
+            total_products=int(row.total_products or 0),
+            total_active_variants=int(row.total_active_variants or 0),
+            total_customers=int(row.total_customers or 0),
+            active_rentals=int(row.active_rentals or 0),
+            rentals_expiring_in_5_days=int(row.rentals_expiring_in_5_days or 0),
+            rentals_expiring_in_3_days=int(row.rentals_expiring_in_3_days or 0),
+            rentals_expiring_tomorrow=int(row.rentals_expiring_tomorrow or 0),
+            expired_rentals=int(row.expired_rentals or 0),
+            pending_renewal_requests=int(row.pending_renewal_requests or 0),
+            pending_payment_verifications=int(row.pending_payment_verifications or 0),
+            verified_payment_totals=Decimal(str(row.verified_payment_totals or 0)),
             currency="IDR",
-            failed_notifications=int(failed_notifications),
+            failed_notifications=int(row.failed_notifications or 0),
         )
+
+    def get_dashboard_overview(self) -> DashboardOverviewRead:
+        today = current_wib_date()
+        summary = self.get_dashboard_summary()
+        rows = self.db.execute(
+            select(Rental, Customer.display_name, Product.name, ProductVariant.name)
+            .join(Customer, Customer.id == Rental.customer_id)
+            .join(Product, Product.id == Rental.product_id)
+            .join(ProductVariant, ProductVariant.id == Rental.product_variant_id)
+            .where(
+                Rental.archived_at.is_(None),
+                Rental.status != RentalStatus.CANCELLED,
+                Rental.status != RentalStatus.EXPIRED,
+                Rental.expiration_date >= today,
+            )
+            .order_by(Rental.expiration_date.asc(), Rental.created_at.desc())
+            .limit(3)
+        ).all()
+        previews = [
+            DashboardRentalPreviewRead(
+                id=rental.id,
+                customer_name=customer_name,
+                product_name=product_name,
+                variant_name=variant_name,
+                expiration_date=rental.expiration_date,
+                effective_status=derive_effective_rental_status(
+                    stored_status=rental.status,
+                    start_date=rental.start_date,
+                    expiration_date=rental.expiration_date,
+                    wib_today=today,
+                ),
+                days_remaining=days_until_expiration(rental.expiration_date, wib_today=today),
+            )
+            for rental, customer_name, product_name, variant_name in rows
+        ]
+        return DashboardOverviewRead(summary=summary, upcoming_rentals=previews)

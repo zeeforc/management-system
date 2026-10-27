@@ -24,30 +24,17 @@ interface DashboardSummary {
 
 interface Rental {
   id: string
-  customer_id: string
-  product_id: string
-  product_variant_id: string
+  customer_name: string
+  product_name: string
+  variant_name: string
   expiration_date: string
   effective_status: string
-  warning_state: string
   days_remaining: number
-}
-
-interface Customer {
-  id: string
-  display_name: string
-}
-
-interface Product {
-  id: string
-  name: string
 }
 
 const auth = useAuthStore()
 const summary = ref<DashboardSummary | null>(null)
 const rentals = ref<Rental[]>([])
-const customers = ref<Customer[]>([])
-const products = ref<Product[]>([])
 const loading = ref(true)
 const error = ref('')
 const activeChart = ref<'rentals' | 'finance'>('rentals')
@@ -60,14 +47,7 @@ const today = new Intl.DateTimeFormat('id-ID', {
   timeZone: 'Asia/Jakarta',
 }).format(new Date())
 
-const customerNames = computed(() => Object.fromEntries(customers.value.map((customer) => [customer.id, customer.display_name])))
-const productNames = computed(() => Object.fromEntries(products.value.map((product) => [product.id, product.name])))
-const upcomingRentals = computed(() =>
-  rentals.value
-    .filter((rental) => rental.effective_status !== 'EXPIRED' && rental.effective_status !== 'CANCELLED')
-    .sort((a, b) => a.days_remaining - b.days_remaining)
-    .slice(0, 3),
-)
+const upcomingRentals = computed(() => rentals.value)
 
 const ringCircumference = 2 * Math.PI * 40
 const ringProgress = computed(() => {
@@ -116,16 +96,9 @@ async function fetchDashboard() {
   loading.value = true
   error.value = ''
   try {
-    const [summaryResponse, rentalResponse, customerResponse, productResponse] = await Promise.all([
-      api.get('/dashboard/summary'),
-      api.get('/rentals?page=1&page_size=100'),
-      api.get('/customers?page=1&page_size=100'),
-      api.get('/products?page=1&page_size=100'),
-    ])
-    summary.value = summaryResponse.data
-    rentals.value = rentalResponse.data.items
-    customers.value = customerResponse.data.items
-    products.value = productResponse.data.items
+    const response = await api.get('/dashboard/overview')
+    summary.value = response.data.summary
+    rentals.value = response.data.upcoming_rentals
   } catch (e: any) {
     error.value = e.response?.data?.detail ?? 'Gagal memuat dashboard. Coba muat ulang halaman.'
   } finally {
@@ -329,8 +302,10 @@ onMounted(fetchDashboard)
                 </span>
                 <span class="rounded-full bg-[#f0f0f2] px-2.5 py-1 text-[10px] font-bold">{{ statusLabel(rental.effective_status) }}</span>
               </div>
-              <p class="mt-4 truncate text-sm font-bold">{{ customerNames[rental.customer_id] || 'Customer' }}</p>
-              <p class="mt-1 truncate text-xs text-[#1c1c1f]/45">{{ productNames[rental.product_id] || 'Produk rental' }}</p>
+              <p class="mt-4 truncate text-sm font-bold">{{ rental.customer_name }}</p>
+              <p class="mt-1 truncate text-xs text-[#1c1c1f]/45">
+                {{ rental.product_name }} · {{ rental.variant_name }}
+              </p>
               <div class="mt-4 flex items-end justify-between border-t border-[#1c1c1f]/[0.06] pt-3">
                 <span class="text-[10px] font-medium text-[#1c1c1f]/40">Berakhir {{ formatShortDate(rental.expiration_date) }}</span>
                 <span class="text-xs font-extrabold">{{ rental.days_remaining }} hari</span>

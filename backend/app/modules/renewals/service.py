@@ -216,7 +216,7 @@ class RenewalService:
             )
 
         old_version = rental.expiration_version
-        for notification in self.db.scalars(
+        pending_notifications = self.db.scalars(
             select(Notification)
             .where(
                 Notification.rental_id == rental.id,
@@ -230,18 +230,22 @@ class RenewalService:
                 ),
             )
             .with_for_update()
-        ).all():
+        ).all()
+        notification_ids = {notification.id for notification in pending_notifications}
+        for notification in pending_notifications:
             notification.status = NotificationStatus.CANCELLED
             notification.last_error = "Rental expiration changed after renewal completion."
-            for event in self.db.scalars(
+        if notification_ids:
+            pending_events = self.db.scalars(
                 select(OutboxEvent)
                 .where(
                     OutboxEvent.aggregate_type == "notification",
-                    OutboxEvent.aggregate_id == notification.id,
+                    OutboxEvent.aggregate_id.in_(notification_ids),
                     OutboxEvent.status.in_((OutboxStatus.PENDING, OutboxStatus.PROCESSING)),
                 )
                 .with_for_update()
-            ).all():
+            ).all()
+            for event in pending_events:
                 event.status = OutboxStatus.FAILED
                 event.processed_at = utc_now()
                 event.last_error = "Rental expiration changed."

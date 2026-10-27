@@ -5,6 +5,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.encryption import decrypt_credential, encrypt_credential
 from app.core.exceptions import BusinessRuleError, NotFoundError
 from app.modules.audit.models import AuditLog
 from app.modules.customers.repository import CustomerRepository
@@ -73,6 +74,9 @@ class RentalService:
             duration_unit=rental.duration_unit,
             agreed_price=rental.agreed_price,
             currency=rental.currency,
+            account_email=decrypt_credential(rental.account_email_encrypted),
+            profile=decrypt_credential(rental.profile_encrypted),
+            pin=decrypt_credential(rental.pin_encrypted),
             status=rental.status,
             effective_status=effective_status,
             warning_state=warning_state,
@@ -87,7 +91,16 @@ class RentalService:
     def list_rentals(self, params: PaginationParams) -> PaginatedResponse[RentalRead]:
         items, total = self.repo.list_rentals(params)
         return PaginatedResponse.create(
-            items=[self.to_read_schema(item) for item in items],
+            items=[
+                self.to_read_schema(rental).model_copy(
+                    update={
+                        "customer_display_name": customer_name,
+                        "product_name": product_name,
+                        "product_variant_name": variant_name,
+                    }
+                )
+                for rental, customer_name, product_name, variant_name in items
+            ],
             total=total,
             params=params,
         )
@@ -114,6 +127,12 @@ class RentalService:
         variant = self.product_repo.get_variant(payload.product_variant_id)
         if variant is None or variant.product_id != product.id:
             raise BusinessRuleError("Selected variant does not belong to the specified product.")
+        if not product.has_profile_pin and any(
+            value and value.strip() for value in (payload.profile, payload.pin)
+        ):
+            raise BusinessRuleError(
+                "Profile and PIN are only available for products configured with profile/PIN."
+            )
 
         duration_value = payload.duration_value or variant.duration_value
         duration_unit = payload.duration_unit or variant.duration_unit
@@ -149,6 +168,9 @@ class RentalService:
             duration_unit=duration_unit,
             agreed_price=agreed_price,
             currency=currency,
+            account_email_encrypted=encrypt_credential(payload.account_email),
+            profile_encrypted=encrypt_credential(payload.profile),
+            pin_encrypted=encrypt_credential(payload.pin),
             status=initial_status,
             renewal_model=payload.renewal_model,
             created_by=created_by,
@@ -206,6 +228,16 @@ class RentalService:
         variant = self.product_repo.get_variant(variant_id)
         if variant is None or variant.archived_at is not None or variant.product_id != product.id:
             raise BusinessRuleError("Selected variant must belong to the selected active product.")
+        if not product.has_profile_pin and any(
+            value and value.strip()
+            for value in (
+                payload.profile if "profile" in payload.model_fields_set else None,
+                payload.pin if "pin" in payload.model_fields_set else None,
+            )
+        ):
+            raise BusinessRuleError(
+                "Profile and PIN are only available for products configured with profile/PIN."
+            )
         variant_changed = variant.id != rental.product_variant_id
 
         start_date = payload.start_date or rental.start_date
@@ -252,6 +284,12 @@ class RentalService:
         rental.duration_unit = duration_unit
         rental.currency = currency
         rental.agreed_price = agreed_price
+        if "account_email" in payload.model_fields_set:
+            rental.account_email_encrypted = encrypt_credential(payload.account_email)
+        if "profile" in payload.model_fields_set:
+            rental.profile_encrypted = encrypt_credential(payload.profile)
+        if "pin" in payload.model_fields_set:
+            rental.pin_encrypted = encrypt_credential(payload.pin)
 
         if payload.status is not None:
             if payload.status == RentalStatus.CANCELLED and rental.status in (
@@ -291,13 +329,16 @@ class RentalService:
             for notification in pending_notifications:
                 notification.status = NotificationStatus.CANCELLED
                 notification.last_error = "Rental was edited; this reminder is no longer current."
-                for event in self.db.scalars(
+            notification_ids = {notification.id for notification in pending_notifications}
+            if notification_ids:
+                pending_events = self.db.scalars(
                     select(OutboxEvent).where(
                         OutboxEvent.aggregate_type == "notification",
-                        OutboxEvent.aggregate_id == notification.id,
+                        OutboxEvent.aggregate_id.in_(notification_ids),
                         OutboxEvent.status.in_((OutboxStatus.PENDING, OutboxStatus.PROCESSING)),
                     )
-                ).all():
+                ).all()
+                for event in pending_events:
                     event.status = OutboxStatus.PROCESSED
                     event.processed_at = utc_now()
 

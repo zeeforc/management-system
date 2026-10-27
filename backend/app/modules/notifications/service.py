@@ -38,7 +38,25 @@ class NotificationService:
     def list_notifications(self, params: PaginationParams) -> PaginatedResponse[NotificationRead]:
         items, total = self.repo.list_notifications(params)
         return PaginatedResponse.create(
-            items=[NotificationRead.model_validate(item) for item in items],
+            items=[
+                NotificationRead.model_validate(notification).model_copy(
+                    update={
+                        "customer_display_name": customer_name,
+                        "customer_telegram_username": customer_username,
+                        "product_name": product_name,
+                        "product_variant_name": variant_name,
+                        "expiration_date": expiration_date,
+                    }
+                )
+                for (
+                    notification,
+                    customer_name,
+                    customer_username,
+                    product_name,
+                    variant_name,
+                    expiration_date,
+                ) in items
+            ],
             total=total,
             params=params,
         )
@@ -51,15 +69,15 @@ class NotificationService:
 
         today = current_wib_date()
         reminder_dates = calculate_reminder_dates(rental.expiration_date)
-        created_or_existing: list[Notification] = []
-        for stage in (ReminderStage.H5, ReminderStage.H3, ReminderStage.H1):
-            existing = self.repo.get_by_rental_version_stage(
-                rental_id=rental.id,
-                expiration_version=rental.expiration_version,
-                reminder_stage=stage.value,
+        existing_by_stage = {
+            notification.reminder_stage: notification
+            for notification in self.repo.get_for_rental_versions(
+                {(rental.id, rental.expiration_version)}
             )
-            if existing is not None:
-                created_or_existing.append(existing)
+        }
+        created_or_existing: list[Notification] = list(existing_by_stage.values())
+        for stage in (ReminderStage.H5, ReminderStage.H3, ReminderStage.H1):
+            if stage in existing_by_stage:
                 continue
 
             scheduled_at = calculate_reminder_scheduled_utc(
@@ -104,12 +122,20 @@ class NotificationService:
         created_count = 0
         queued_count = 0
         rejected_count = 0
+        existing_by_key = {
+            (
+                notification.rental_id,
+                notification.expiration_version,
+                notification.reminder_stage,
+            ): notification
+            for notification in self.repo.get_for_rental_versions(
+                {(rental.id, rental.expiration_version) for rental in rentals}
+            )
+        }
         for rental in rentals:
             stage = stages_by_expiration[rental.expiration_date]
-            notification = self.repo.get_by_rental_version_stage(
-                rental.id,
-                rental.expiration_version,
-                stage.value,
+            notification = existing_by_key.get(
+                (rental.id, rental.expiration_version, stage)
             )
             if notification is None:
                 notification = Notification(
@@ -130,9 +156,46 @@ class NotificationService:
                 created_count += 1
 
         due_notifications = self.repo.get_due_notifications(current_time)
+        notification_ids = {notification.id for notification in due_notifications}
+        rental_by_id = self.rental_repo.get_rentals_for_update(
+            {notification.rental_id for notification in due_notifications}
+        )
+        customer_ids = {notification.customer_id for notification in due_notifications}
+        customers_by_id = (
+            {
+                customer.id: customer
+                for customer in self.db.scalars(
+                    select(Customer).where(Customer.id.in_(customer_ids))
+                ).all()
+            }
+            if customer_ids
+            else {}
+        )
+        consents_by_customer = {}
+        if customer_ids:
+            latest_consents = self.db.scalars(
+                select(NotificationConsent)
+                .where(
+                    NotificationConsent.customer_id.in_(customer_ids),
+                    NotificationConsent.consent_type == ConsentType.TELEGRAM_REMINDERS,
+                )
+                .order_by(
+                    NotificationConsent.customer_id,
+                    func.coalesce(
+                        NotificationConsent.revoked_at,
+                        NotificationConsent.consented_at,
+                        NotificationConsent.created_at,
+                    ).desc(),
+                    NotificationConsent.created_at.desc(),
+                )
+            ).all()
+            for consent in latest_consents:
+                consents_by_customer.setdefault(consent.customer_id, consent)
+        pending_outbox_ids = self.repo.get_pending_outbox_notification_ids(notification_ids)
+
         for notification in due_notifications:
-            rental = self.rental_repo.get_rental(notification.rental_id, for_update=True)
-            customer = self.db.get(Customer, notification.customer_id)
+            rental = rental_by_id.get(notification.rental_id)
+            customer = customers_by_id.get(notification.customer_id)
             if (
                 rental is None
                 or rental.archived_at is not None
@@ -150,9 +213,9 @@ class NotificationService:
                 or customer.archived_at is not None
                 or customer.status != "ACTIVE"
                 or customer.telegram_chat_id is None
-                or not self._has_granted_consent(
-                    customer.id,
-                    ConsentType.TELEGRAM_REMINDERS,
+                or (
+                    (consent := consents_by_customer.get(customer.id)) is None
+                    or consent.consent_status != ConsentStatus.GRANTED
                 )
             ):
                 notification.status = NotificationStatus.FAILED_PERMANENT
@@ -162,7 +225,7 @@ class NotificationService:
                 rejected_count += 1
                 continue
 
-            if not self.repo.has_pending_outbox_event(notification.id):
+            if notification.id not in pending_outbox_ids:
                 self.db.add(
                     OutboxEvent(
                         event_type="notification.send",
@@ -182,22 +245,3 @@ class NotificationService:
             "queued": queued_count,
             "rejected": rejected_count,
         }
-
-    def _has_granted_consent(self, customer_id: uuid.UUID, consent_type: ConsentType) -> bool:
-        consent = self.db.scalar(
-            select(NotificationConsent)
-            .where(
-                NotificationConsent.customer_id == customer_id,
-                NotificationConsent.consent_type == consent_type,
-            )
-            .order_by(
-                func.coalesce(
-                    NotificationConsent.revoked_at,
-                    NotificationConsent.consented_at,
-                    NotificationConsent.created_at,
-                ).desc(),
-                NotificationConsent.created_at.desc(),
-            )
-            .limit(1)
-        )
-        return consent is not None and consent.consent_status == ConsentStatus.GRANTED

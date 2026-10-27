@@ -1,7 +1,7 @@
 """Pydantic schemas for notifications and reminder logs."""
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict
 
@@ -36,6 +36,11 @@ class NotificationRead(BaseModel):
     sent_at: datetime | None = None
     telegram_message_id: int | None = None
     last_error: str | None = None
+    customer_display_name: str | None = None
+    customer_telegram_username: str | None = None
+    product_name: str | None = None
+    product_variant_name: str | None = None
+    expiration_date: date | None = None
     attempts: list[NotificationAttemptRead] = []
     created_at: datetime
     updated_at: datetime

@@ -19,6 +19,7 @@ interface Product {
   description: string | null
   category: string
   image_url: string | null
+  has_profile_pin: boolean
   status: string
   variants: ProductVariant[]
 }
@@ -31,7 +32,14 @@ const error = ref('')
 const showAddProduct = ref(false)
 const addingProduct = ref(false)
 const editingProductId = ref<string | null>(null)
-const productForm = ref({ name: '', description: '', category: '', image_url: '', status: 'ACTIVE' })
+const productForm = ref({
+  name: '',
+  description: '',
+  category: '',
+  image_url: '',
+  has_profile_pin: false,
+  status: 'ACTIVE',
+})
 const productError = ref('')
 
 // Modal add variant
@@ -63,6 +71,7 @@ async function submitProduct() {
     const payload: any = {
       name: productForm.value.name.trim(),
       category: productForm.value.category.trim(),
+      has_profile_pin: productForm.value.has_profile_pin,
       status: productForm.value.status,
     }
     if (editingProductId.value) {
@@ -80,7 +89,14 @@ async function submitProduct() {
     }
     showAddProduct.value = false
     editingProductId.value = null
-    productForm.value = { name: '', description: '', category: '', image_url: '', status: 'ACTIVE' }
+    productForm.value = {
+      name: '',
+      description: '',
+      category: '',
+      image_url: '',
+      has_profile_pin: false,
+      status: 'ACTIVE',
+    }
     await fetchProducts()
   } catch (e: any) {
     productError.value = e.response?.data?.detail ?? 'Gagal menambah produk.'
@@ -92,7 +108,14 @@ async function submitProduct() {
 function openAddProduct() {
   editingProductId.value = null
   productError.value = ''
-  productForm.value = { name: '', description: '', category: '', image_url: '', status: 'ACTIVE' }
+  productForm.value = {
+    name: '',
+    description: '',
+    category: '',
+    image_url: '',
+    has_profile_pin: false,
+    status: 'ACTIVE',
+  }
   showAddProduct.value = true
 }
 
@@ -104,6 +127,7 @@ function openEditProduct(product: Product) {
     description: product.description ?? '',
     category: product.category,
     image_url: product.image_url ?? '',
+    has_profile_pin: product.has_profile_pin,
     status: product.status,
   }
   showAddProduct.value = true
@@ -248,7 +272,10 @@ onMounted(fetchProducts)
                 {{ product.status }}
               </span>
             </div>
-            <p class="text-xs text-gray-400 mt-0.5">{{ product.category }}<span v-if="product.description"> · {{ product.description }}</span></p>
+            <p class="text-xs text-gray-400 mt-0.5">
+              {{ product.category }}<span v-if="product.description"> · {{ product.description }}</span>
+              <span v-if="product.has_profile_pin"> · Memerlukan profile & PIN</span>
+            </p>
           </div>
           <button
             @click="openAddVariant(product)"
@@ -324,6 +351,19 @@ onMounted(fetchProducts)
               <input v-model="productForm.image_url" type="url" placeholder="https://... (opsional)"
                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
             </div>
+            <label class="flex items-start gap-3 rounded-xl border border-gray-200 p-3 text-sm text-gray-700">
+              <input
+                v-model="productForm.has_profile_pin"
+                type="checkbox"
+                class="mt-0.5 h-4 w-4 rounded border-gray-300 accent-[#1c1c1f]"
+              />
+              <span>
+                <span class="block font-medium">Produk ini memakai profile dan PIN</span>
+                <span class="mt-0.5 block text-xs text-gray-500">
+                  Aktifkan agar kolom profile dan PIN muncul saat membuat rental.
+                </span>
+              </span>
+            </label>
             <div>
               <label class="block text-sm font-medium text-gray-700 mb-1">Status</label>
               <select v-model="productForm.status"

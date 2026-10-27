@@ -261,6 +261,51 @@ class TestAuditLogs:
 
 
 class TestRentalEditing:
+    def test_account_credentials_are_encrypted_in_database(
+        self,
+        db: Session,
+        active_rental: Rental,
+        product: Product,
+    ) -> None:
+        from app.core.encryption import decrypt_credential
+        from app.modules.rentals.schemas import RentalUpdate
+
+        product.has_profile_pin = True
+        db.flush()
+        updated = RentalService(db).update_rental(
+            active_rental.id,
+            RentalUpdate(
+                account_email="account@example.com",
+                profile="Profile 2",
+                pin="4321",
+            ),
+        )
+        db.refresh(active_rental)
+
+        assert active_rental.account_email_encrypted != "account@example.com"
+        assert active_rental.profile_encrypted != "Profile 2"
+        assert active_rental.pin_encrypted != "4321"
+        assert decrypt_credential(active_rental.account_email_encrypted) == "account@example.com"
+        assert decrypt_credential(active_rental.profile_encrypted) == "Profile 2"
+        assert decrypt_credential(active_rental.pin_encrypted) == "4321"
+        assert updated.account_email == "account@example.com"
+        assert updated.profile == "Profile 2"
+        assert updated.pin == "4321"
+
+    def test_profile_and_pin_are_rejected_for_products_without_profile_support(
+        self,
+        db: Session,
+        active_rental: Rental,
+    ) -> None:
+        from app.core.exceptions import BusinessRuleError
+        from app.modules.rentals.schemas import RentalUpdate
+
+        with pytest.raises(BusinessRuleError):
+            RentalService(db).update_rental(
+                active_rental.id,
+                RentalUpdate(profile="Profile 2", pin="4321"),
+            )
+
     def test_editing_expiration_invalidates_pending_reminders(
         self, db: Session, active_rental: Rental, admin_user: AdminUser
     ) -> None:

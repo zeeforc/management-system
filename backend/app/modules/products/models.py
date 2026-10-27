@@ -1,9 +1,18 @@
 """SQLAlchemy models for products and product variants (Section 6.2)."""
 
-from decimal import Decimal
 import uuid
+from decimal import Decimal
 
-from sqlalchemy import CheckConstraint, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    false,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -19,6 +28,12 @@ class Product(Base, UUIDPrimaryKeyMixin, TimestampMixin, ArchivableMixin):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     category: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
     image_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    has_profile_pin: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=false(),
+        nullable=False,
+    )
     status: Mapped[ProductStatus] = mapped_column(
         String(32),
         default=ProductStatus.ACTIVE,

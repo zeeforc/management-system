@@ -48,6 +48,23 @@ button:disabled {
   cursor: not-allowed;
 }
 
+@media (pointer: coarse) {
+  body,
+  body * {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  input,
+  textarea,
+  [contenteditable="true"] {
+    -webkit-touch-callout: default;
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}
+
 #app {
   min-height: 100vh;
 }

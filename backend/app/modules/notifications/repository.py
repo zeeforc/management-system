@@ -3,10 +3,12 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, tuple_
 from sqlalchemy.orm import Session
 
+from app.modules.customers.models import Customer
 from app.modules.notifications.models import Notification, OutboxEvent
+from app.modules.products.models import Product, ProductVariant
 from app.modules.rentals.models import Rental
 from app.shared.pagination import PaginationParams
 
@@ -15,16 +17,27 @@ class NotificationRepository:
     def __init__(self, db: Session) -> None:
         self.db = db
 
-    def list_notifications(self, params: PaginationParams) -> tuple[list[Notification], int]:
+    def list_notifications(self, params: PaginationParams) -> tuple[list[tuple], int]:
         base_stmt = select(Notification)
         total = self.db.scalar(select(func.count()).select_from(base_stmt.subquery())) or 0
-        items = list(
-            self.db.scalars(
-                base_stmt.order_by(Notification.scheduled_at.desc())
-                .offset(params.offset)
-                .limit(params.page_size)
-            ).all()
+        stmt = (
+            select(
+                Notification,
+                Customer.display_name,
+                Customer.telegram_username,
+                Product.name,
+                ProductVariant.name,
+                Rental.expiration_date,
+            )
+            .outerjoin(Customer, Customer.id == Notification.customer_id)
+            .outerjoin(Rental, Rental.id == Notification.rental_id)
+            .outerjoin(Product, Product.id == Rental.product_id)
+            .outerjoin(ProductVariant, ProductVariant.id == Rental.product_variant_id)
+            .order_by(Notification.scheduled_at.desc())
+            .offset(params.offset)
+            .limit(params.page_size)
         )
+        items = list(self.db.execute(stmt).all())
         return items, int(total)
 
     def get_by_rental_version_stage(
@@ -39,6 +52,19 @@ class NotificationRepository:
             Notification.reminder_stage == reminder_stage,
         )
         return self.db.scalar(stmt)
+
+    def get_for_rental_versions(
+        self,
+        rental_versions: set[tuple[uuid.UUID, int]],
+    ) -> list[Notification]:
+        if not rental_versions:
+            return []
+        stmt = select(Notification).where(
+            tuple_(Notification.rental_id, Notification.expiration_version).in_(
+                list(rental_versions)
+            )
+        )
+        return list(self.db.scalars(stmt).all())
 
     def create_notification(self, notification: Notification) -> Notification:
         self.db.add(notification)
@@ -99,3 +125,20 @@ class NotificationRepository:
             OutboxEvent.status.in_(("PENDING", "PROCESSING")),
         )
         return self.db.scalar(stmt) is not None
+
+    def get_pending_outbox_notification_ids(
+        self,
+        notification_ids: set[uuid.UUID],
+    ) -> set[uuid.UUID]:
+        if not notification_ids:
+            return set()
+        stmt = (
+            select(OutboxEvent.aggregate_id)
+            .where(
+                OutboxEvent.aggregate_type == "notification",
+                OutboxEvent.aggregate_id.in_(notification_ids),
+                OutboxEvent.status.in_(("PENDING", "PROCESSING")),
+            )
+            .distinct()
+        )
+        return set(self.db.scalars(stmt).all())

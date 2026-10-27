@@ -1,5 +1,6 @@
-from pydantic import ValidationError
 import pytest
+from cryptography.fernet import Fernet
+from pydantic import ValidationError
 
 from app.core.config import Settings
 
@@ -31,6 +32,7 @@ def test_production_accepts_explicit_non_default_secrets() -> None:
         APP_ENV="production",
         DEBUG=False,
         SECRET_KEY="s" * 48,
+        CREDENTIALS_ENCRYPTION_KEY=Fernet.generate_key().decode(),
         INITIAL_OWNER_PASSWORD="non-default-initial-password",
         POSTGRES_PASSWORD="non-default-database-password",
         TELEGRAM_BOT_TOKEN="123456:valid-looking-token",

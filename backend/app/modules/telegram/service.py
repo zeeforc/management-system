@@ -5,7 +5,7 @@ from datetime import timedelta
 from html import escape
 
 from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, with_loader_criteria
 
 from app.core.exceptions import BusinessRuleError
 from app.core.security import hash_token
@@ -68,7 +68,18 @@ class TelegramService:
         )
 
     def format_products(self, page: int = 1) -> str:
-        stmt = select(Product).where(Product.archived_at.is_(None)).order_by(Product.name)
+        stmt = (
+            select(Product)
+            .options(
+                with_loader_criteria(
+                    ProductVariant,
+                    ProductVariant.archived_at.is_(None),
+                    include_aliases=True,
+                )
+            )
+            .where(Product.archived_at.is_(None))
+            .order_by(Product.name)
+        )
         total = self.db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
         products = list(self.db.scalars(stmt.offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE)).all())
         if not products:
@@ -79,17 +90,7 @@ class TelegramService:
                 f"▫️ <b>{escape(product.name)}</b> · {escape(product.status)}\n"
                 f"   Kategori: {escape(product.category)}"
             )
-            variants = list(
-                self.db.scalars(
-                    select(ProductVariant)
-                    .where(
-                        ProductVariant.product_id == product.id,
-                        ProductVariant.archived_at.is_(None),
-                    )
-                    .order_by(ProductVariant.name)
-                ).all()
-            )
-            for variant in variants:
+            for variant in sorted(product.variants, key=lambda item: item.name):
                 lines.append(
                     f"   └ {escape(variant.name)} · "
                     f"{variant.duration_value} {escape(variant.duration_unit.lower())}, "

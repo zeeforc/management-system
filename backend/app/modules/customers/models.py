@@ -1,7 +1,7 @@
-"""SQLAlchemy models for customers, notification consents, and Telegram link tokens (Section 6.3)."""
+"""SQLAlchemy models for customers, consents, and Telegram link tokens."""
 
-from datetime import datetime
 import uuid
+from datetime import datetime
 
 from sqlalchemy import BigInteger, DateTime, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
@@ -29,7 +29,7 @@ class Customer(Base, UUIDPrimaryKeyMixin, TimestampMixin, ArchivableMixin):
     consents: Mapped[list["NotificationConsent"]] = relationship(
         "NotificationConsent",
         back_populates="customer",
-        lazy="selectin",
+        lazy="raise",
     )
 
 

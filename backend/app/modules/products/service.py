@@ -60,6 +60,7 @@ class ProductService:
             description=payload.description,
             category=payload.category.strip(),
             image_url=payload.image_url,
+            has_profile_pin=payload.has_profile_pin,
             status=payload.status,
         )
         self.repo.create_product(product)
@@ -90,6 +91,8 @@ class ProductService:
             product.category = payload.category.strip()
         if "image_url" in payload.model_fields_set:
             product.image_url = payload.image_url
+        if payload.has_profile_pin is not None:
+            product.has_profile_pin = payload.has_profile_pin
         if payload.status is not None:
             product.status = payload.status
         self._audit(

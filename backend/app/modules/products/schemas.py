@@ -1,8 +1,8 @@
 """Pydantic schemas for products and product variants."""
 
+import uuid
 from datetime import datetime
 from decimal import Decimal
-import uuid
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -41,6 +41,7 @@ class ProductUpdate(BaseModel):
     description: str | None = None
     category: str | None = Field(default=None, min_length=1, max_length=80)
     image_url: str | None = None
+    has_profile_pin: bool | None = None
     status: ProductStatus | None = None
 
 
@@ -58,6 +59,7 @@ class ProductCreate(BaseModel):
     description: str | None = None
     category: str = Field(min_length=1, max_length=80)
     image_url: str | None = None
+    has_profile_pin: bool = False
     status: ProductStatus = ProductStatus.ACTIVE
 
 
@@ -69,6 +71,7 @@ class ProductRead(BaseModel):
     description: str | None = None
     category: str
     image_url: str | None = None
+    has_profile_pin: bool = False
     status: ProductStatus
     variants: list[ProductVariantRead] = []
     created_at: datetime

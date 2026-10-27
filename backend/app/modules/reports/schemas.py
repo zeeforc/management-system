@@ -1,5 +1,6 @@
 """Pydantic schemas for dashboard metrics (Section 12.1)."""
 
+import uuid
 from datetime import date
 from decimal import Decimal
 
@@ -21,3 +22,18 @@ class DashboardSummaryRead(BaseModel):
     verified_payment_totals: Decimal
     currency: str = "IDR"
     failed_notifications: int
+
+
+class DashboardRentalPreviewRead(BaseModel):
+    id: uuid.UUID
+    customer_name: str
+    product_name: str
+    variant_name: str
+    expiration_date: date
+    effective_status: str
+    days_remaining: int
+
+
+class DashboardOverviewRead(BaseModel):
+    summary: DashboardSummaryRead
+    upcoming_rentals: list[DashboardRentalPreviewRead]

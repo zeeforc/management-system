@@ -26,33 +26,15 @@ interface Notification {
   sent_at: string | null
   telegram_message_id: number | null
   last_error: string | null
+  customer_display_name: string | null
+  customer_telegram_username: string | null
+  product_name: string | null
+  product_variant_name: string | null
+  expiration_date: string | null
   attempts: NotificationAttempt[]
 }
 
-interface Customer {
-  id: string
-  display_name: string
-  telegram_username: string | null
-}
-
-interface Rental {
-  id: string
-  customer_id: string
-  product_id: string
-  product_variant_id: string
-  expiration_date: string
-}
-
-interface Product {
-  id: string
-  name: string
-  variants: { id: string; name: string }[]
-}
-
 const notifications = ref<Notification[]>([])
-const customers = ref<Customer[]>([])
-const rentals = ref<Rental[]>([])
-const products = ref<Product[]>([])
 const loading = ref(true)
 const error = ref('')
 const activeFilter = ref<'all' | 'attention'>('all')
@@ -82,39 +64,26 @@ function formatDate(value: string | null) {
   }).format(new Date(value))
 }
 
-function customerLabel(customerId: string) {
-  const customer = customers.value.find((item) => item.id === customerId)
-  if (!customer) return 'Customer tidak ditemukan'
-  return customer.telegram_username
-    ? `${customer.display_name} · @${customer.telegram_username}`
-    : customer.display_name
+function customerLabel(notification: Notification) {
+  if (!notification.customer_display_name) return 'Customer tidak ditemukan'
+  return notification.customer_telegram_username
+    ? `${notification.customer_display_name} · @${notification.customer_telegram_username}`
+    : notification.customer_display_name
 }
 
-function rentalLabel(rentalId: string) {
-  const rental = rentals.value.find((item) => item.id === rentalId)
-  if (!rental) return 'Detail rental tidak tersedia'
-  const product = products.value.find((item) => item.id === rental.product_id)
-  const variant = product?.variants.find((item) => item.id === rental.product_variant_id)
-  const productLabel = product?.name
-    ? `${product.name}${variant?.name ? ` / ${variant.name}` : ''}`
+function rentalLabel(notification: Notification) {
+  const productLabel = notification.product_name
+    ? `${notification.product_name}${notification.product_variant_name ? ` / ${notification.product_variant_name}` : ''}`
     : 'Produk'
-  return `${productLabel} · berakhir ${formatDate(rental.expiration_date)}`
+  return `${productLabel} · berakhir ${formatDate(notification.expiration_date)}`
 }
 
 async function fetchNotifications() {
   loading.value = true
   error.value = ''
   try {
-    const [notificationResponse, customerResponse, rentalResponse, productResponse] = await Promise.all([
-      api.get('/notifications?page=1&page_size=100'),
-      api.get('/customers?page=1&page_size=100'),
-      api.get('/rentals?page=1&page_size=100'),
-      api.get('/products?page=1&page_size=100'),
-    ])
+    const notificationResponse = await api.get('/notifications?page=1&page_size=100')
     notifications.value = notificationResponse.data.items
-    customers.value = customerResponse.data.items
-    rentals.value = rentalResponse.data.items
-    products.value = productResponse.data.items
   } catch {
     error.value = 'Log notifikasi gagal dimuat. Coba muat ulang.'
   } finally {
@@ -198,10 +167,10 @@ onMounted(fetchNotifications)
                 <span class="text-xs text-[#1c1c1f]/35">Versi {{ notification.expiration_version }}</span>
               </div>
               <p class="mt-3 truncate text-sm font-semibold text-[#1c1c1f]">
-                {{ customerLabel(notification.customer_id) }}
+                {{ customerLabel(notification) }}
               </p>
               <p class="mt-1 text-xs text-[#1c1c1f]/45">
-                {{ rentalLabel(notification.rental_id) }}
+                {{ rentalLabel(notification) }}
               </p>
               <p class="mt-1 text-xs text-[#1c1c1f]/45">Jadwal reminder: {{ formatDate(notification.scheduled_at) }}</p>
             </div>

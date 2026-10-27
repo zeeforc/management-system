@@ -17,6 +17,7 @@ interface Product {
   id: string
   name: string
   category: string
+  has_profile_pin: boolean
   status: string
   variants: ProductVariant[]
 }
@@ -33,12 +34,18 @@ interface Rental {
   customer_id: string
   product_id: string
   product_variant_id: string
+  customer_display_name: string | null
+  product_name: string | null
+  product_variant_name: string | null
   start_date: string
   expiration_date: string
   duration_value: number
   duration_unit: string
   agreed_price: string
   currency: string
+  account_email: string | null
+  profile: string | null
+  pin: string | null
   status: string
   effective_status: string
   warning_state: string
@@ -50,6 +57,8 @@ interface Rental {
 const rentals = ref<Rental[]>([])
 const customers = ref<Customer[]>([])
 const products = ref<Product[]>([])
+const formDataLoaded = ref(false)
+const loadingFormData = ref(false)
 const loading = ref(true)
 const error = ref('')
 
@@ -58,6 +67,8 @@ const showAddRental = ref(false)
 const addingRental = ref(false)
 const editingRentalId = ref<string | null>(null)
 const rentalError = ref('')
+const revealedPins = ref(new Set<string>())
+let rentalFormDataRequest: Promise<void> | null = null
 
 const rentalForm = ref({
   customer_id: '',
@@ -68,34 +79,11 @@ const rentalForm = ref({
   duration_value: 1,
   duration_unit: 'MONTHS',
   agreed_price: '',
+  account_email: '',
+  profile: '',
+  pin: '',
   renewal_model: 'CONTINUOUS',
   status: 'ACTIVE',
-})
-
-const customerMap = computed(() => {
-  const map: Record<string, string> = {}
-  customers.value.forEach((c) => {
-    map[c.id] = c.display_name
-  })
-  return map
-})
-
-const productMap = computed(() => {
-  const map: Record<string, string> = {}
-  products.value.forEach((p) => {
-    map[p.id] = p.name
-  })
-  return map
-})
-
-const variantMap = computed(() => {
-  const map: Record<string, string> = {}
-  products.value.forEach((p) => {
-    p.variants.forEach((v) => {
-      map[v.id] = v.name
-    })
-  })
-  return map
 })
 
 const availableVariants = computed(() => {
@@ -104,9 +92,17 @@ const availableVariants = computed(() => {
   return p ? p.variants : []
 })
 
+const selectedProduct = computed(() =>
+  products.value.find((product) => product.id === rentalForm.value.product_id) ?? null,
+)
+
 function onProductChange() {
   rentalForm.value.product_variant_id = ''
   rentalForm.value.agreed_price = ''
+  if (!selectedProduct.value?.has_profile_pin) {
+    rentalForm.value.profile = ''
+    rentalForm.value.pin = ''
+  }
 }
 
 function onVariantChange() {
@@ -120,7 +116,27 @@ function onVariantChange() {
   }
 }
 
-function openAddRental() {
+async function loadRentalFormData() {
+  if (formDataLoaded.value) return
+  if (rentalFormDataRequest) return rentalFormDataRequest
+  loadingFormData.value = true
+  rentalFormDataRequest = Promise.all([
+    api.get('/customers?page=1&page_size=100'),
+    api.get('/products?page=1&page_size=100'),
+  ])
+    .then(([customerResponse, productResponse]) => {
+      customers.value = customerResponse.data.items
+      products.value = productResponse.data.items
+      formDataLoaded.value = true
+    })
+    .finally(() => {
+      loadingFormData.value = false
+      rentalFormDataRequest = null
+    })
+  return rentalFormDataRequest
+}
+
+async function openAddRental() {
   editingRentalId.value = null
   rentalError.value = ''
   rentalForm.value = {
@@ -132,15 +148,30 @@ function openAddRental() {
     duration_value: 1,
     duration_unit: 'MONTHS',
     agreed_price: '',
+    account_email: '',
+    profile: '',
+    pin: '',
     renewal_model: 'CONTINUOUS',
     status: 'ACTIVE',
   }
   showAddRental.value = true
+  try {
+    await loadRentalFormData()
+  } catch (cause: any) {
+    rentalError.value = cause.response?.data?.detail ?? 'Gagal memuat customer dan produk.'
+  }
 }
 
-function openEditRental(rental: Rental) {
-  editingRentalId.value = rental.id
+async function openEditRental(rental: Rental) {
   rentalError.value = ''
+  showAddRental.value = true
+  try {
+    await loadRentalFormData()
+  } catch (cause: any) {
+    rentalError.value = cause.response?.data?.detail ?? 'Gagal memuat customer dan produk.'
+    return
+  }
+  editingRentalId.value = rental.id
   rentalForm.value = {
     customer_id: rental.customer_id,
     product_id: rental.product_id,
@@ -150,6 +181,9 @@ function openEditRental(rental: Rental) {
     duration_value: rental.duration_value,
     duration_unit: rental.duration_unit,
     agreed_price: rental.agreed_price,
+    account_email: rental.account_email ?? '',
+    profile: rental.profile ?? '',
+    pin: rental.pin ?? '',
     renewal_model: rental.renewal_model,
     status: rental.status,
   }
@@ -160,14 +194,8 @@ async function fetchData() {
   loading.value = true
   error.value = ''
   try {
-    const [rentRes, custRes, prodRes] = await Promise.all([
-      api.get('/rentals?page=1&page_size=100'),
-      api.get('/customers?page=1&page_size=100'),
-      api.get('/products?page=1&page_size=100'),
-    ])
-    rentals.value = rentRes.data.items
-    customers.value = custRes.data.items
-    products.value = prodRes.data.items
+    const response = await api.get('/rentals?page=1&page_size=100')
+    rentals.value = response.data.items
   } catch (e: any) {
     error.value = e.response?.data?.detail ?? 'Gagal memuat data rental.'
   } finally {
@@ -192,6 +220,14 @@ async function submitRental() {
       product_variant_id: rentalForm.value.product_variant_id,
       start_date: rentalForm.value.start_date,
       renewal_model: rentalForm.value.renewal_model,
+      account_email: rentalForm.value.account_email.trim() || null,
+    }
+    if (selectedProduct.value?.has_profile_pin) {
+      payload.profile = rentalForm.value.profile.trim() || null
+      payload.pin = rentalForm.value.pin.trim() || null
+    } else if (editingRentalId.value) {
+      payload.profile = null
+      payload.pin = null
     }
     if (rentalForm.value.agreed_price) {
       payload.agreed_price = rentalForm.value.agreed_price
@@ -219,6 +255,9 @@ async function submitRental() {
       duration_value: 1,
       duration_unit: 'MONTHS',
       agreed_price: '',
+      account_email: '',
+      profile: '',
+      pin: '',
       renewal_model: 'CONTINUOUS',
       status: 'ACTIVE',
     }
@@ -250,6 +289,13 @@ function statusBadge(status: string) {
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+function togglePin(rentalId: string) {
+  const updated = new Set(revealedPins.value)
+  if (updated.has(rentalId)) updated.delete(rentalId)
+  else updated.add(rentalId)
+  revealedPins.value = updated
 }
 
 onMounted(fetchData)
@@ -311,11 +357,26 @@ onMounted(fetchData)
           <tbody class="divide-y divide-[#1c1c1f]/[0.05]">
             <tr v-for="r in rentals" :key="r.id" class="transition-colors hover:bg-[#1c1c1f]/[0.025]">
               <td class="px-6 py-4 font-semibold text-gray-900">
-                {{ customerMap[r.customer_id] || 'Customer #' + r.customer_id.slice(0, 8) }}
+                {{ r.customer_display_name || 'Customer #' + r.customer_id.slice(0, 8) }}
               </td>
               <td class="px-6 py-4 text-gray-700">
-                <span class="font-medium text-gray-900">{{ productMap[r.product_id] || 'Produk' }}</span>
-                <span class="text-xs text-gray-500 block">Varian: {{ variantMap[r.product_variant_id] || r.duration_value + ' ' + r.duration_unit.toLowerCase() }}</span>
+                <span class="font-medium text-gray-900">{{ r.product_name || 'Produk' }}</span>
+                <span class="text-xs text-gray-500 block">Varian: {{ r.product_variant_name || r.duration_value + ' ' + r.duration_unit.toLowerCase() }}</span>
+                <span v-if="r.account_email" class="mt-1 block text-xs text-gray-500">
+                  Akun: {{ r.account_email }}
+                </span>
+                <span v-if="r.profile || r.pin" class="mt-1 block text-xs text-gray-500">
+                  Profile: {{ r.profile || '—' }} · PIN:
+                  <span class="font-mono">{{ revealedPins.has(r.id) ? r.pin : '••••' }}</span>
+                  <button
+                    type="button"
+                    class="ml-1 font-semibold text-[#1c1c1f]/70 underline"
+                    :aria-label="revealedPins.has(r.id) ? 'Sembunyikan PIN' : 'Tampilkan PIN'"
+                    @click="togglePin(r.id)"
+                  >
+                    {{ revealedPins.has(r.id) ? 'Sembunyikan' : 'Lihat' }}
+                  </button>
+                </span>
               </td>
               <td class="px-6 py-4 text-gray-600 text-xs">
                 <div>Mulai: {{ formatDate(r.start_date) }}</div>
@@ -349,8 +410,16 @@ onMounted(fetchData)
         <article v-for="r in rentals" :key="r.id" class="space-y-2 p-4">
           <div class="flex items-start justify-between gap-2">
             <div>
-              <h2 class="text-sm font-semibold text-slate-900">{{ customerMap[r.customer_id] || 'Customer' }}</h2>
-              <p class="text-xs text-slate-600">{{ productMap[r.product_id] }} - {{ variantMap[r.product_variant_id] }}</p>
+              <h2 class="text-sm font-semibold text-slate-900">{{ r.customer_display_name || 'Customer' }}</h2>
+              <p class="text-xs text-slate-600">{{ r.product_name }} - {{ r.product_variant_name }}</p>
+              <p v-if="r.account_email" class="break-all text-xs text-slate-500">Akun: {{ r.account_email }}</p>
+              <p v-if="r.profile || r.pin" class="text-xs text-slate-500">
+                Profile: {{ r.profile || '—' }} · PIN:
+                <span class="font-mono">{{ revealedPins.has(r.id) ? r.pin : '••••' }}</span>
+                <button type="button" class="ml-1 underline" @click="togglePin(r.id)">
+                  {{ revealedPins.has(r.id) ? 'Sembunyikan' : 'Lihat' }}
+                </button>
+              </p>
             </div>
             <span class="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold" :class="statusBadge(r.effective_status)">
               {{ r.effective_status }}
@@ -389,9 +458,10 @@ onMounted(fetchData)
               <select
                 v-model="rentalForm.customer_id"
                 required
+                :disabled="loadingFormData"
                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
               >
-                <option value="" disabled>-- Pilih Customer --</option>
+                <option value="" disabled>{{ loadingFormData ? 'Memuat customer...' : '-- Pilih Customer --' }}</option>
                 <option v-for="c in customers" :key="c.id" :value="c.id">
                   {{ c.display_name }} ({{ c.telegram_username ? '@' + c.telegram_username : 'No Telegram' }})
                 </option>
@@ -404,9 +474,10 @@ onMounted(fetchData)
                 v-model="rentalForm.product_id"
                 @change="onProductChange"
                 required
+                :disabled="loadingFormData"
                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
               >
-                <option value="" disabled>-- Pilih Produk --</option>
+                <option value="" disabled>{{ loadingFormData ? 'Memuat produk...' : '-- Pilih Produk --' }}</option>
                 <option v-for="p in products" :key="p.id" :value="p.id">
                   {{ p.name }} ({{ p.category }})
                 </option>
@@ -501,6 +572,48 @@ onMounted(fetchData)
                 placeholder="Default harga varian"
                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
+            </div>
+
+            <div class="space-y-3 rounded-xl border border-gray-200 p-3">
+              <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">Detail akun (opsional)</p>
+              <div>
+                <label class="mb-1 block text-sm font-medium text-gray-700">Email akun</label>
+                <input
+                  v-model="rentalForm.account_email"
+                  type="email"
+                  maxlength="320"
+                  autocomplete="off"
+                  placeholder="email akun produk"
+                  class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+              <div v-if="selectedProduct?.has_profile_pin" class="grid grid-cols-2 gap-3">
+                <div>
+                  <label class="mb-1 block text-sm font-medium text-gray-700">Profile</label>
+                  <input
+                    v-model="rentalForm.profile"
+                    type="text"
+                    maxlength="160"
+                    autocomplete="off"
+                    placeholder="Nama profile"
+                    class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label class="mb-1 block text-sm font-medium text-gray-700">PIN</label>
+                  <input
+                    v-model="rentalForm.pin"
+                    type="password"
+                    maxlength="64"
+                    autocomplete="new-password"
+                    placeholder="PIN profile"
+                    class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
+              <p v-if="selectedProduct?.has_profile_pin" class="text-xs text-gray-500">
+                Profile dan PIN tersimpan terenkripsi.
+              </p>
             </div>
 
             <div class="flex gap-3 pt-2">
