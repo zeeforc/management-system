@@ -157,6 +157,7 @@ async def on_renewal_rental_selected(
                 query.from_user.id,
                 query.message.chat.id,
             )
+            qris_file_id = service.get_renewal_qris_file_id()
     except (ValueError, BusinessRuleError) as exc:
         await query.answer(str(exc) or "Pilihan produk tidak valid.", show_alert=True)
         return
@@ -164,14 +165,14 @@ async def on_renewal_rental_selected(
     await query.answer()
     if pending_order is not None:
         if (
-            not settings.TELEGRAM_RENEWAL_QRIS_FILE_ID
+            not qris_file_id
             or not settings.TELEGRAM_RENEWAL_REVIEW_GROUP_ID
         ):
             await query.message.answer("Pembayaran QRIS belum dikonfigurasi. Hubungi admin.")
             return
         try:
             await query.message.answer_photo(
-                photo=settings.TELEGRAM_RENEWAL_QRIS_FILE_ID,
+                photo=qris_file_id,
                 caption=_payment_caption(pending_order),
             )
         except TelegramAPIError as exc:
@@ -196,27 +197,34 @@ async def on_renewal_month_selected(
     if query.message is None or query.message.chat.type != "private":
         await query.answer("Perpanjangan hanya dapat diproses lewat chat pribadi.", show_alert=True)
         return
-    if not settings.TELEGRAM_RENEWAL_QRIS_FILE_ID or not settings.TELEGRAM_RENEWAL_REVIEW_GROUP_ID:
+    if not settings.TELEGRAM_RENEWAL_REVIEW_GROUP_ID:
         await query.answer("Pembayaran QRIS belum dikonfigurasi. Hubungi admin.", show_alert=True)
         return
+    order: TelegramRenewalOrder | None = None
     try:
         rental_id = uuid.UUID(callback_data.rental_id)
         with SessionLocal() as db:
-            order = TelegramService(db).create_telegram_renewal(
-                rental_id,
-                query.from_user.id,
-                query.message.chat.id,
-                callback_data.months,
-            )
+            service = TelegramService(db)
+            qris_file_id = service.get_renewal_qris_file_id()
+            if qris_file_id:
+                order = service.create_telegram_renewal(
+                    rental_id,
+                    query.from_user.id,
+                    query.message.chat.id,
+                    callback_data.months,
+                )
     except (ValueError, BusinessRuleError) as exc:
         await query.answer(str(exc) or "Pilihan perpanjangan tidak valid.", show_alert=True)
+        return
+    if not qris_file_id or order is None:
+        await query.answer("QRIS belum disetel. Hubungi admin.", show_alert=True)
         return
 
     try:
         async with Bot(token=settings.TELEGRAM_BOT_TOKEN) as bot:
             await bot.send_photo(
                 chat_id=query.message.chat.id,
-                photo=settings.TELEGRAM_RENEWAL_QRIS_FILE_ID,
+                photo=qris_file_id,
                 caption=_payment_caption(order),
             )
     except TelegramAPIError as exc:

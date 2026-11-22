@@ -179,6 +179,24 @@ async def cmd_dashboard(message: Message) -> None:
     await _reply_admin_data(message, lambda service: service.format_admin_dashboard())
 
 
+@admin_router.message(Command("setqris"))
+async def cmd_set_qris(message: Message) -> None:
+    if not await _require_private_admin(message):
+        return
+    if not message.photo:
+        await message.answer("Kirim foto QRIS dengan caption /setqris di chat pribadi bot.")
+        return
+    if message.from_user is None:
+        await message.answer("Akun Telegram admin tidak ditemukan.")
+        return
+    with SessionLocal() as db:
+        TelegramService(db).set_renewal_qris_file_id(
+            message.photo[-1].file_id,
+            message.from_user.id,
+        )
+    await message.answer("QRIS perpanjangan berhasil diperbarui.")
+
+
 @admin_router.message(Command("products"))
 async def cmd_products(message: Message) -> None:
     page = _page(_arguments(message))
@@ -997,6 +1015,7 @@ async def cmd_admin_help(message: Message) -> None:
         "/add_variant — tambah varian\n"
         "/add_customer — tambah customer\n"
         "/add_rental — tambah rental interaktif\n"
+        "/setqris — ganti QRIS perpanjangan dengan foto\n"
         "/dashboard — ringkasan bisnis\n"
         "/products [halaman] — produk dan varian\n"
         "/rentals [halaman] — rental aktif\n"

@@ -10,9 +10,11 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, with_loader_criteria
 from sqlalchemy.sql.elements import ColumnElement
 
+from app.core.config import settings
 from app.core.encryption import decrypt_credential
 from app.core.exceptions import BusinessRuleError
 from app.core.security import hash_token
+from app.modules.audit.models import AuditLog, SystemSetting
 from app.modules.customers.models import (
     Customer,
     NotificationConsent,
@@ -35,6 +37,7 @@ from app.shared.datetime_utils import (
     utc_now,
 )
 from app.shared.enums import (
+    ActorType,
     ConsentStatus,
     ConsentType,
     CustomerResponseType,
@@ -50,6 +53,7 @@ from app.shared.enums import (
 from app.shared.money import format_idr, normalize_money, validate_currency
 
 PAGE_SIZE = 10
+TELEGRAM_RENEWAL_QRIS_SETTING_KEY = "telegram_renewal_qris"
 
 
 @dataclass(frozen=True)
@@ -115,6 +119,39 @@ class TelegramService:
             f"<code>{escape(format_idr(summary.verified_payment_totals))}</code>\n\n"
             f"🔔 Notifikasi perlu perhatian: <code>{summary.failed_notifications}</code>"
         )
+
+    def get_renewal_qris_file_id(self) -> str | None:
+        setting = self.db.get(SystemSetting, TELEGRAM_RENEWAL_QRIS_SETTING_KEY)
+        if setting is not None:
+            file_id = setting.value.get("file_id")
+            if isinstance(file_id, str) and file_id.strip():
+                return file_id
+        return settings.TELEGRAM_RENEWAL_QRIS_FILE_ID
+
+    def set_renewal_qris_file_id(self, file_id: str, telegram_admin_id: int) -> None:
+        normalized_file_id = file_id.strip()
+        if not normalized_file_id:
+            raise BusinessRuleError("Foto QRIS tidak valid.")
+        setting = self.db.get(SystemSetting, TELEGRAM_RENEWAL_QRIS_SETTING_KEY)
+        if setting is None:
+            setting = SystemSetting(
+                key=TELEGRAM_RENEWAL_QRIS_SETTING_KEY,
+                value={"file_id": normalized_file_id},
+            )
+            self.db.add(setting)
+        else:
+            setting.value = {"file_id": normalized_file_id}
+        self.db.add(
+            AuditLog(
+                actor_type=ActorType.ADMIN,
+                actor_id=str(telegram_admin_id),
+                action="telegram.renewal_qris_updated",
+                entity_type="SystemSetting",
+                entity_id=TELEGRAM_RENEWAL_QRIS_SETTING_KEY,
+                after_data={"configured": True},
+            )
+        )
+        self.db.commit()
 
     def format_products(self, page: int = 1) -> str:
         stmt = (
