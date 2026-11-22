@@ -81,6 +81,7 @@ class RentalWizard(StatesGroup):
     duration_unit = State()
     price = State()
     account_email = State()
+    account_password = State()
     profile = State()
     pin = State()
 
@@ -642,7 +643,10 @@ async def customer_username(message: Message, state: FSMContext) -> None:
     username = (message.text or "").strip()
     await state.update_data(telegram_username=None if username == "/skip" else username)
     await state.set_state(CustomerWizard.notes)
-    await message.answer("Kirim catatan internal atau /skip.")
+    await message.answer(
+        "Kirim catatan internal atau /skip. Username yang dicatat dianggap sudah menyetujui "
+        "pesan Telegram; customer tetap perlu mengirim /start sekali."
+    )
 
 
 @admin_router.message(CustomerWizard.notes)
@@ -757,6 +761,7 @@ async def _finish_rental(message: Message, state: FSMContext) -> None:
             currency=data["currency"],
             renewal_model=RenewalModel(data["renewal_model"]),
             account_email=data.get("account_email"),
+            account_password=data.get("account_password"),
             profile=data.get("profile"),
             pin=data.get("pin"),
         )
@@ -784,6 +789,16 @@ async def rental_account_email(message: Message, state: FSMContext) -> None:
         return
     raw_email = (message.text or "").strip()
     await state.update_data(account_email=None if raw_email == "/skip" else raw_email)
+    await state.set_state(RentalWizard.account_password)
+    await message.answer("Kirim password akun atau /skip.")
+
+
+@admin_router.message(RentalWizard.account_password)
+async def rental_account_password(message: Message, state: FSMContext) -> None:
+    if not await _require_private_admin(message):
+        return
+    raw_password = (message.text or "").strip()
+    await state.update_data(account_password=None if raw_password == "/skip" else raw_password)
     data = await state.get_data()
     if data["has_profile_pin"]:
         await state.set_state(RentalWizard.profile)
@@ -967,8 +982,9 @@ async def cmd_admin_help(message: Message) -> None:
     if not _is_admin(message):
         await message.answer(
             "<b>Perintah pelanggan</b>\n"
-            "/start — tautkan akun pelanggan\n"
-            "/consent — setujui pengingat dan penawaran Telegram\n"
+            "/start — hubungkan akun berdasarkan username yang dicatat admin\n"
+            "/perpanjang — pilih langganan dan ajukan perpanjangan\n"
+            "/consent — aktifkan kembali pesan otomatis setelah /stop\n"
             "/rating — beri rating dan saran\n"
             "/stop — cabut persetujuan dan hentikan pesan otomatis",
             parse_mode="HTML",
@@ -986,7 +1002,8 @@ async def cmd_admin_help(message: Message) -> None:
         "/rentals [halaman] — rental aktif\n"
         "/expiring H5|H3|H1 [halaman] — rental mendekati jatuh tempo\n"
         "/expired [halaman] — rental yang telah berakhir\n"
-        "/customer &lt;nama atau username&gt; [halaman] — cari pelanggan",
+        "/customer &lt;nama atau username&gt; [halaman] — cari pelanggan\n"
+        "Di grup verifikasi: balas foto bukti dengan /done atau /resend",
         parse_mode="HTML",
         reply_markup=_admin_menu_keyboard(),
     )

@@ -9,3 +9,12 @@ class OfferSelectionCallback(CallbackData, prefix="offer_sel"):
 
 class OfferDeclineCallback(CallbackData, prefix="offer_dec"):
     offer_id: str
+
+
+class RenewalRentalCallback(CallbackData, prefix="renew_rental"):
+    rental_id: str
+
+
+class RenewalMonthCallback(CallbackData, prefix="renew_month"):
+    rental_id: str
+    months: int

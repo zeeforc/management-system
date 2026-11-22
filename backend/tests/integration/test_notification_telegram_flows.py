@@ -290,6 +290,142 @@ def test_telegram_link_token_is_single_use_and_consent_is_reversible(
     )
 
 
+def test_username_link_matches_case_insensitively_and_does_not_restore_opt_out(
+    db: Session,
+    customer,
+) -> None:
+    customer.telegram_username = "Test_User"
+    db.flush()
+    service = TelegramService(db)
+
+    assert service.link_customer_by_username(987654321, 987654321, "test_user")
+    assert customer.telegram_user_id == 987654321
+    assert service._has_current_consent(customer.id, ConsentType.TELEGRAM_REMINDERS)
+    assert service._has_current_consent(customer.id, ConsentType.TELEGRAM_RENEWAL_OFFERS)
+
+    service.record_customer_consent(987654321, 987654321, granted=False)
+    service.link_customer_by_username(987654321, 987654321, "TEST_USER")
+    assert not service._has_current_consent(customer.id, ConsentType.TELEGRAM_REMINDERS)
+    assert not service._has_current_consent(customer.id, ConsentType.TELEGRAM_RENEWAL_OFFERS)
+
+
+def test_telegram_renewal_prices_and_completes_after_admin_confirmation(
+    db: Session,
+    customer,
+    active_rental,
+) -> None:
+    customer.telegram_user_id = 987654321
+    customer.telegram_chat_id = 987654321
+    customer.telegram_username = "test_user"
+    service = TelegramService(db)
+
+    order = service.create_telegram_renewal(
+        active_rental.id,
+        customer.telegram_user_id,
+        customer.telegram_chat_id,
+        3,
+    )
+    assert order.amount == Decimal("150000.00")
+    assert order.duration_value == 3
+    assert order.start_date == active_rental.expiration_date + timedelta(days=1)
+
+    service.record_renewal_proof_message(order.renewal_id, -100123, 456)
+    completed_order, completed_now = service.complete_telegram_renewal(
+        -100123,
+        456,
+        123456789,
+    )
+    renewal = db.get(RentalRenewal, order.renewal_id)
+    payment = db.scalar(select(Payment).where(Payment.renewal_id == order.renewal_id))
+
+    assert completed_now
+    assert completed_order.expiration_date == order.expiration_date
+    assert renewal.status == RenewalStatus.COMPLETED
+    assert active_rental.expiration_date == order.expiration_date
+    assert payment.status == PaymentStatus.PAID
+    assert payment.verified_at is not None
+
+
+def test_telegram_renewal_lists_expiring_rentals_before_long_and_expired(
+    db: Session,
+    customer,
+    active_rental,
+    product,
+    variant,
+) -> None:
+    customer.telegram_user_id = 987654321
+    customer.telegram_chat_id = 987654321
+    today = current_wib_date()
+    active_rental.expiration_date = today + timedelta(days=3)
+    long_rental = type(active_rental)(
+        customer_id=customer.id,
+        product_id=product.id,
+        product_variant_id=variant.id,
+        start_date=today,
+        expiration_date=today + timedelta(days=60),
+        duration_value=1,
+        duration_unit="MONTHS",
+        agreed_price=Decimal("50000.00"),
+        currency="IDR",
+        status="ACTIVE",
+        renewal_model="CONTINUOUS",
+    )
+    expired_rental = type(active_rental)(
+        customer_id=customer.id,
+        product_id=product.id,
+        product_variant_id=variant.id,
+        start_date=today - timedelta(days=40),
+        expiration_date=today - timedelta(days=5),
+        duration_value=1,
+        duration_unit="MONTHS",
+        agreed_price=Decimal("50000.00"),
+        currency="IDR",
+        status="EXPIRED",
+        renewal_model="CONTINUOUS",
+    )
+    db.add_all((long_rental, expired_rental))
+    db.flush()
+
+    rentals = TelegramService(db).list_customer_renewals(
+        customer.telegram_user_id,
+        customer.telegram_chat_id,
+    )
+
+    assert [rental.id for rental, _, _ in rentals] == [
+        active_rental.id,
+        long_rental.id,
+        expired_rental.id,
+    ]
+
+
+def test_monthly_price_uses_30_day_conversion_for_day_variants(
+    db: Session,
+    variant,
+) -> None:
+    variant.duration_value = 7
+    variant.duration_unit = "DAYS"
+    variant.default_price = Decimal("7000.00")
+    db.flush()
+
+    assert TelegramService._variant_monthly_price(variant) == Decimal("30000.00")
+
+
+def test_rental_account_password_is_encrypted_at_rest(
+    db: Session,
+    active_rental,
+) -> None:
+    from app.modules.rentals.schemas import RentalUpdate
+    from app.modules.rentals.service import RentalService
+
+    updated = RentalService(db).update_rental(
+        active_rental.id,
+        RentalUpdate(account_password="private-pass"),
+    )
+
+    assert updated.account_password == "private-pass"
+    assert active_rental.account_password_encrypted != "private-pass"
+
+
 def test_declining_offers_is_idempotent(
     db: Session,
     customer,

@@ -1,10 +1,11 @@
 """SQLAlchemy models for rental_renewals and renewal_offers (Section 6.5 & 6.6)."""
 
+import uuid
 from datetime import date, datetime
 from decimal import Decimal
-import uuid
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     Date,
     DateTime,
@@ -13,6 +14,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -29,6 +31,11 @@ class RentalRenewal(Base, UUIDPrimaryKeyMixin):
         CheckConstraint("new_expiration_date >= new_start_date", name="renewal_new_dates_valid"),
         CheckConstraint("duration_value > 0", name="renewal_duration_positive"),
         CheckConstraint("agreed_price >= 0", name="renewal_agreed_price_non_negative"),
+        UniqueConstraint(
+            "telegram_review_chat_id",
+            "telegram_review_message_id",
+            name="uq_rental_renewals_telegram_review_message",
+        ),
     )
 
     rental_id: Mapped[uuid.UUID] = mapped_column(
@@ -58,6 +65,8 @@ class RentalRenewal(Base, UUIDPrimaryKeyMixin):
         nullable=True,
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    telegram_review_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    telegram_review_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

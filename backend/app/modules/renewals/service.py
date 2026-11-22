@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import timedelta
+from decimal import Decimal
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -51,7 +52,7 @@ class RenewalService:
         self,
         action: str,
         renewal: RentalRenewal,
-        admin_id: uuid.UUID,
+        admin_id: uuid.UUID | int,
         before_status: RenewalStatus,
     ) -> None:
         self.db.add(
@@ -190,7 +191,7 @@ class RenewalService:
         self.db.refresh(renewal)
         return RenewalRead.model_validate(renewal)
 
-    def complete_renewal(self, renewal_id: uuid.UUID, admin_id: uuid.UUID) -> RenewalRead:
+    def complete_renewal(self, renewal_id: uuid.UUID, admin_id: uuid.UUID | int) -> RenewalRead:
         renewal = self.repo.get_renewal(renewal_id, for_update=True)
         if renewal is None:
             raise NotFoundError("Renewal", renewal_id)
@@ -209,7 +210,7 @@ class RenewalService:
                 Payment.status == "PAID",
                 Payment.verified_at.is_not(None),
             )
-        )
+        ) or Decimal("0")
         if renewal.agreed_price > 0 and verified_amount < renewal.agreed_price:
             raise BusinessRuleError(
                 "Renewal cannot be completed until its verified payments cover the agreed price."

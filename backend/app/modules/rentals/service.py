@@ -75,6 +75,7 @@ class RentalService:
             agreed_price=rental.agreed_price,
             currency=rental.currency,
             account_email=decrypt_credential(rental.account_email_encrypted),
+            account_password=decrypt_credential(rental.account_password_encrypted),
             profile=decrypt_credential(rental.profile_encrypted),
             pin=decrypt_credential(rental.pin_encrypted),
             status=rental.status,
@@ -169,6 +170,7 @@ class RentalService:
             agreed_price=agreed_price,
             currency=currency,
             account_email_encrypted=encrypt_credential(payload.account_email),
+            account_password_encrypted=encrypt_credential(payload.account_password),
             profile_encrypted=encrypt_credential(payload.profile),
             pin_encrypted=encrypt_credential(payload.pin),
             status=initial_status,
@@ -286,6 +288,8 @@ class RentalService:
         rental.agreed_price = agreed_price
         if "account_email" in payload.model_fields_set:
             rental.account_email_encrypted = encrypt_credential(payload.account_email)
+        if "account_password" in payload.model_fields_set:
+            rental.account_password_encrypted = encrypt_credential(payload.account_password)
         if "profile" in payload.model_fields_set:
             rental.profile_encrypted = encrypt_credential(payload.profile)
         if "pin" in payload.model_fields_set:

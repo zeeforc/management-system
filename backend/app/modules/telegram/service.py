@@ -1,13 +1,16 @@
 """Telegram-facing workflows shared with the application's database services."""
 
 import uuid
-from datetime import timedelta
+from dataclasses import dataclass
+from datetime import date, timedelta
+from decimal import ROUND_HALF_UP, Decimal
 from html import escape
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, with_loader_criteria
 from sqlalchemy.sql.elements import ColumnElement
 
+from app.core.encryption import decrypt_credential
 from app.core.exceptions import BusinessRuleError
 from app.core.security import hash_token
 from app.modules.customers.models import (
@@ -16,9 +19,12 @@ from app.modules.customers.models import (
     StoreFeedback,
     TelegramLinkToken,
 )
+from app.modules.customers.service import ensure_initial_telegram_consents
 from app.modules.notifications.models import NotificationResponse
+from app.modules.payments.models import Payment
 from app.modules.products.models import Product, ProductVariant
 from app.modules.renewals.models import RenewalOffer, RentalRenewal
+from app.modules.renewals.service import RenewalService
 from app.modules.rentals.models import Rental
 from app.modules.reports.schemas import DashboardSummaryRead
 from app.modules.reports.service import ReportService
@@ -33,13 +39,35 @@ from app.shared.enums import (
     ConsentType,
     CustomerResponseType,
     CustomerStatus,
+    DurationUnit,
+    PaymentMethod,
+    PaymentStatus,
+    RenewalModel,
     RenewalOfferStatus,
     RenewalStatus,
     RentalStatus,
 )
-from app.shared.money import format_idr
+from app.shared.money import format_idr, normalize_money, validate_currency
 
 PAGE_SIZE = 10
+
+
+@dataclass(frozen=True)
+class TelegramRenewalOrder:
+    renewal_id: uuid.UUID
+    chat_id: int
+    customer_name: str
+    username: str | None
+    product_name: str
+    duration_value: int
+    start_date: date
+    expiration_date: date
+    amount: Decimal
+    currency: str
+    account_email: str | None
+    account_password: str | None
+    profile: str | None
+    pin: str | None
 
 
 class TelegramService:
@@ -266,8 +294,465 @@ class TelegramService:
         customer.telegram_chat_id = telegram_chat_id
         customer.telegram_username = username
         token.used_at = utc_now()
+        ensure_initial_telegram_consents(self.db, customer.id)
         self.db.commit()
         return customer.display_name
+
+    def link_customer_by_username(
+        self,
+        telegram_user_id: int,
+        telegram_chat_id: int,
+        username: str | None,
+    ) -> str | None:
+        if not username:
+            return None
+        matches = list(
+            self.db.scalars(
+                select(Customer)
+                .where(
+                    func.lower(Customer.telegram_username) == username.lower(),
+                    Customer.archived_at.is_(None),
+                    Customer.status == CustomerStatus.ACTIVE,
+                )
+                .with_for_update()
+                .limit(2)
+            ).all()
+        )
+        if not matches:
+            return None
+        if len(matches) > 1:
+            raise BusinessRuleError(
+                "Username Telegram ini terdaftar pada lebih dari satu customer."
+            )
+        customer = matches[0]
+        if customer.telegram_user_id not in (None, telegram_user_id):
+            raise BusinessRuleError(
+                "Username ini sudah terhubung ke akun Telegram lain. Hubungi admin."
+            )
+        linked_user = self.db.scalar(
+            select(Customer.id).where(
+                Customer.telegram_user_id == telegram_user_id,
+                Customer.id != customer.id,
+            )
+        )
+        linked_chat = self.db.scalar(
+            select(Customer.id).where(
+                Customer.telegram_chat_id == telegram_chat_id,
+                Customer.id != customer.id,
+            )
+        )
+        if linked_user is not None or linked_chat is not None:
+            raise BusinessRuleError("Akun Telegram ini sudah ditautkan ke customer lain.")
+
+        customer.telegram_user_id = telegram_user_id
+        customer.telegram_chat_id = telegram_chat_id
+        customer.telegram_username = username
+        ensure_initial_telegram_consents(self.db, customer.id)
+        self.db.commit()
+        return customer.display_name
+
+    def list_customer_renewals(
+        self,
+        telegram_user_id: int,
+        telegram_chat_id: int,
+    ) -> list[tuple[Rental, Product, ProductVariant]]:
+        customer = self.db.scalar(
+            select(Customer).where(
+                Customer.telegram_user_id == telegram_user_id,
+                Customer.telegram_chat_id == telegram_chat_id,
+                Customer.archived_at.is_(None),
+                Customer.status == CustomerStatus.ACTIVE,
+            )
+        )
+        if customer is None:
+            raise BusinessRuleError("Akun Telegram pelanggan belum terhubung.")
+        rows = list(
+            self.db.execute(
+                select(Rental, Product, ProductVariant)
+                .join(Product, Product.id == Rental.product_id)
+                .join(ProductVariant, ProductVariant.id == Rental.product_variant_id)
+                .where(
+                    Rental.customer_id == customer.id,
+                    Rental.archived_at.is_(None),
+                    Rental.status != RentalStatus.CANCELLED,
+                )
+            ).all()
+        )
+        today = current_wib_date()
+
+        def sort_key(row: tuple[Rental, Product, ProductVariant]) -> tuple[int, int]:
+            days_remaining = (row[0].expiration_date - today).days
+            if 0 <= days_remaining <= 5:
+                return (0, days_remaining)
+            if days_remaining > 5:
+                return (1, days_remaining)
+            return (2, -days_remaining)
+
+        return sorted(rows, key=sort_key)
+
+    def pending_telegram_renewal(
+        self,
+        rental_id: uuid.UUID,
+        telegram_user_id: int,
+        telegram_chat_id: int,
+    ) -> TelegramRenewalOrder | None:
+        customer = self.db.scalar(
+            select(Customer).where(
+                Customer.telegram_user_id == telegram_user_id,
+                Customer.telegram_chat_id == telegram_chat_id,
+                Customer.archived_at.is_(None),
+                Customer.status == CustomerStatus.ACTIVE,
+            )
+        )
+        if customer is None:
+            raise BusinessRuleError("Akun Telegram pelanggan belum terhubung.")
+        renewal = self.db.scalar(
+            select(RentalRenewal)
+            .join(Rental, Rental.id == RentalRenewal.rental_id)
+            .where(
+                Rental.id == rental_id,
+                Rental.customer_id == customer.id,
+                RentalRenewal.status == RenewalStatus.PENDING,
+            )
+            .order_by(RentalRenewal.created_at.desc())
+            .limit(1)
+        )
+        if renewal is None:
+            return None
+        if renewal.telegram_review_message_id is not None:
+            raise BusinessRuleError(
+                "Bukti pembayaran sudah dikirim. Mohon tunggu konfirmasi admin."
+            )
+        return self._renewal_order(renewal.id)
+
+    def telegram_renewal_monthly_price(
+        self,
+        rental_id: uuid.UUID,
+        telegram_user_id: int,
+        telegram_chat_id: int,
+    ) -> Decimal:
+        customer = self.db.scalar(
+            select(Customer).where(
+                Customer.telegram_user_id == telegram_user_id,
+                Customer.telegram_chat_id == telegram_chat_id,
+                Customer.archived_at.is_(None),
+                Customer.status == CustomerStatus.ACTIVE,
+            )
+        )
+        if customer is None:
+            raise BusinessRuleError("Akun Telegram pelanggan belum terhubung.")
+        rental = self.db.scalar(
+            select(Rental).where(
+                Rental.id == rental_id,
+                Rental.customer_id == customer.id,
+                Rental.archived_at.is_(None),
+                Rental.status != RentalStatus.CANCELLED,
+            )
+        )
+        if rental is None:
+            raise BusinessRuleError("Langganan ini tidak ditemukan untuk akun Anda.")
+        variant = self.db.get(ProductVariant, rental.product_variant_id)
+        if variant is None:
+            raise BusinessRuleError("Varian produk tidak ditemukan.")
+        return self._variant_monthly_price(variant)
+
+    def create_telegram_renewal(
+        self,
+        rental_id: uuid.UUID,
+        telegram_user_id: int,
+        telegram_chat_id: int,
+        months: int,
+    ) -> TelegramRenewalOrder:
+        if not 1 <= months <= 12:
+            raise BusinessRuleError("Durasi perpanjangan harus antara 1 sampai 12 bulan.")
+        customer = self.db.scalar(
+            select(Customer).where(
+                Customer.telegram_user_id == telegram_user_id,
+                Customer.telegram_chat_id == telegram_chat_id,
+                Customer.archived_at.is_(None),
+                Customer.status == CustomerStatus.ACTIVE,
+            )
+        )
+        if customer is None:
+            raise BusinessRuleError("Akun Telegram pelanggan belum terhubung.")
+        rental = self.db.scalar(
+            select(Rental)
+            .where(
+                Rental.id == rental_id,
+                Rental.customer_id == customer.id,
+                Rental.archived_at.is_(None),
+                Rental.status != RentalStatus.CANCELLED,
+            )
+            .with_for_update()
+        )
+        if rental is None:
+            raise BusinessRuleError("Langganan tidak ditemukan atau tidak dapat diperpanjang.")
+
+        existing = self.db.scalar(
+            select(RentalRenewal)
+            .where(
+                RentalRenewal.rental_id == rental.id,
+                RentalRenewal.status == RenewalStatus.PENDING,
+                RentalRenewal.id.in_(
+                    select(Payment.renewal_id).where(
+                        Payment.rental_id == rental.id,
+                        Payment.status == PaymentStatus.PENDING,
+                        Payment.payment_reference.like("Telegram renewal %"),
+                    )
+                ),
+            )
+            .order_by(RentalRenewal.created_at.desc())
+            .limit(1)
+            .with_for_update()
+        )
+        if existing is not None:
+            if existing.duration_value != months or existing.duration_unit != DurationUnit.MONTHS:
+                raise BusinessRuleError(
+                    "Sudah ada permintaan perpanjangan yang menunggu untuk langganan ini."
+                )
+            if existing.telegram_review_message_id is not None:
+                raise BusinessRuleError(
+                    "Bukti pembayaran sudah diterima dan sedang menunggu konfirmasi admin."
+                )
+            return self._renewal_order(existing.id)
+
+        variant = self.db.get(ProductVariant, rental.product_variant_id)
+        if variant is None:
+            raise BusinessRuleError("Varian produk tidak ditemukan.")
+        monthly_price = self._variant_monthly_price(variant)
+        amount = normalize_money(monthly_price * months, variant.currency)
+        today = current_wib_date()
+        expired = rental.expiration_date < today
+        renewal_model = RenewalModel.IMMEDIATE if expired else RenewalModel.CONTINUOUS
+        new_start_date = today if expired else rental.expiration_date + timedelta(days=1)
+        new_expiration_date = calculate_expiration_date(
+            new_start_date,
+            months,
+            DurationUnit.MONTHS,
+        )
+        renewal = RentalRenewal(
+            rental_id=rental.id,
+            previous_start_date=rental.start_date,
+            previous_expiration_date=rental.expiration_date,
+            new_start_date=new_start_date,
+            new_expiration_date=new_expiration_date,
+            duration_value=months,
+            duration_unit=DurationUnit.MONTHS,
+            renewal_model=renewal_model,
+            agreed_price=amount,
+            currency=validate_currency(variant.currency),
+            status=RenewalStatus.PENDING,
+        )
+        self.db.add(renewal)
+        self.db.flush()
+        self.db.add(
+            Payment(
+                customer_id=customer.id,
+                rental_id=rental.id,
+                renewal_id=renewal.id,
+                amount=amount,
+                currency=renewal.currency,
+                payment_method=PaymentMethod.QRIS,
+                status=PaymentStatus.PENDING,
+                payment_reference=f"Telegram renewal {renewal.id}",
+            )
+        )
+        self.db.commit()
+        return self._renewal_order(renewal.id)
+
+    @staticmethod
+    def _variant_monthly_price(variant: ProductVariant) -> Decimal:
+        duration_value = Decimal(variant.duration_value)
+        if variant.duration_unit == DurationUnit.MONTHS:
+            months = duration_value
+        elif variant.duration_unit == DurationUnit.YEARS:
+            months = duration_value * 12
+        elif variant.duration_unit == DurationUnit.WEEKS:
+            months = duration_value * 7 / 30
+        elif variant.duration_unit == DurationUnit.DAYS:
+            months = duration_value / 30
+        else:
+            raise BusinessRuleError("Satuan durasi varian tidak didukung.")
+        return (Decimal(variant.default_price) / months).quantize(
+            Decimal("1"),
+            rounding=ROUND_HALF_UP,
+        )
+
+    def _renewal_order(self, renewal_id: uuid.UUID) -> TelegramRenewalOrder:
+        row = self.db.execute(
+            select(RentalRenewal, Rental, Customer, Product).join(
+                Rental, Rental.id == RentalRenewal.rental_id
+            ).join(
+                Customer, Customer.id == Rental.customer_id
+            ).join(
+                Product, Product.id == Rental.product_id
+            ).where(RentalRenewal.id == renewal_id)
+        ).one_or_none()
+        if row is None:
+            raise BusinessRuleError("Permintaan perpanjangan tidak ditemukan.")
+        renewal, rental, customer, product = row
+        if customer.telegram_chat_id is None:
+            raise BusinessRuleError("Chat Telegram customer tidak tersedia.")
+        return TelegramRenewalOrder(
+            renewal_id=renewal.id,
+            chat_id=customer.telegram_chat_id,
+            customer_name=customer.display_name,
+            username=customer.telegram_username,
+            product_name=product.name,
+            duration_value=renewal.duration_value,
+            start_date=renewal.new_start_date,
+            expiration_date=renewal.new_expiration_date,
+            amount=renewal.agreed_price,
+            currency=renewal.currency,
+            account_email=decrypt_credential(rental.account_email_encrypted),
+            account_password=decrypt_credential(rental.account_password_encrypted),
+            profile=decrypt_credential(rental.profile_encrypted),
+            pin=decrypt_credential(rental.pin_encrypted),
+        )
+
+    def renewal_for_proof(
+        self,
+        telegram_user_id: int,
+        telegram_chat_id: int,
+    ) -> TelegramRenewalOrder:
+        customer = self.db.scalar(
+            select(Customer).where(
+                Customer.telegram_user_id == telegram_user_id,
+                Customer.telegram_chat_id == telegram_chat_id,
+                Customer.archived_at.is_(None),
+                Customer.status == CustomerStatus.ACTIVE,
+            )
+        )
+        if customer is None:
+            raise BusinessRuleError("Akun Telegram pelanggan belum terhubung.")
+        renewal = self.db.scalar(
+            select(RentalRenewal)
+            .join(Rental, Rental.id == RentalRenewal.rental_id)
+            .where(
+                Rental.customer_id == customer.id,
+                RentalRenewal.status == RenewalStatus.PENDING,
+                RentalRenewal.id.in_(
+                    select(Payment.renewal_id).where(
+                        Payment.customer_id == customer.id,
+                        Payment.status == PaymentStatus.PENDING,
+                        Payment.payment_reference.like("Telegram renewal %"),
+                    )
+                ),
+            )
+            .order_by(RentalRenewal.created_at.desc())
+            .limit(1)
+            .with_for_update()
+        )
+        if renewal is None:
+            raise BusinessRuleError("Tidak ada permintaan perpanjangan yang menunggu bukti.")
+        if renewal.telegram_review_message_id is not None:
+            raise BusinessRuleError("Bukti pembayaran sudah diterima dan sedang menunggu admin.")
+        return self._renewal_order(renewal.id)
+
+    def record_renewal_proof_message(
+        self,
+        renewal_id: uuid.UUID,
+        group_chat_id: int,
+        message_id: int,
+    ) -> None:
+        renewal = self.db.scalar(
+            select(RentalRenewal)
+            .where(
+                RentalRenewal.id == renewal_id,
+                RentalRenewal.status == RenewalStatus.PENDING,
+                RentalRenewal.telegram_review_message_id.is_(None),
+            )
+            .with_for_update()
+        )
+        if renewal is None:
+            raise BusinessRuleError("Permintaan ini sudah berubah; bukti tidak dapat ditautkan.")
+        renewal.telegram_review_chat_id = group_chat_id
+        renewal.telegram_review_message_id = message_id
+        self.db.commit()
+
+    def resend_renewal_proof(self, group_chat_id: int, message_id: int) -> TelegramRenewalOrder:
+        renewal = self.db.scalar(
+            select(RentalRenewal)
+            .where(
+                RentalRenewal.telegram_review_chat_id == group_chat_id,
+                RentalRenewal.telegram_review_message_id == message_id,
+                RentalRenewal.status == RenewalStatus.PENDING,
+            )
+            .with_for_update()
+        )
+        if renewal is None:
+            raise BusinessRuleError("Bukti ini tidak ditemukan atau permintaan sudah selesai.")
+        order = self._renewal_order(renewal.id)
+        renewal.telegram_review_chat_id = None
+        renewal.telegram_review_message_id = None
+        self.db.commit()
+        return order
+
+    def complete_telegram_renewal(
+        self,
+        group_chat_id: int,
+        message_id: int,
+        telegram_admin_id: int,
+    ) -> tuple[TelegramRenewalOrder, bool]:
+        renewal = self.db.scalar(
+            select(RentalRenewal)
+            .where(
+                RentalRenewal.telegram_review_chat_id == group_chat_id,
+                RentalRenewal.telegram_review_message_id == message_id,
+            )
+            .with_for_update()
+        )
+        if renewal is None:
+            raise BusinessRuleError("Balas foto bukti yang dikirim bot dengan /done.")
+        order = self._renewal_order(renewal.id)
+        if renewal.status == RenewalStatus.COMPLETED:
+            return order, False
+        if renewal.status not in (RenewalStatus.PENDING, RenewalStatus.APPROVED):
+            raise BusinessRuleError("Permintaan perpanjangan ini tidak dapat diselesaikan.")
+        rental = self.db.scalar(
+            select(Rental).where(Rental.id == renewal.rental_id).with_for_update()
+        )
+        if (
+            rental is None
+            or rental.archived_at is not None
+            or rental.status == RentalStatus.CANCELLED
+        ):
+            raise BusinessRuleError("Rental sudah dibatalkan atau diarsipkan.")
+        if rental.expiration_date != renewal.previous_expiration_date:
+            raise BusinessRuleError(
+                "Tanggal rental berubah sejak permintaan dibuat. Minta admin meninjau ulang."
+            )
+
+        payment = self.db.scalar(
+            select(Payment)
+            .where(Payment.renewal_id == renewal.id)
+            .order_by(Payment.created_at.desc())
+            .limit(1)
+            .with_for_update()
+        )
+        if payment is None:
+            raise BusinessRuleError("Pembayaran untuk permintaan ini tidak ditemukan.")
+        if payment.status == PaymentStatus.PENDING:
+            now = utc_now()
+            payment.status = PaymentStatus.PAID
+            payment.paid_at = now
+            payment.verified_at = now
+        elif payment.status != PaymentStatus.PAID or payment.verified_at is None:
+            raise BusinessRuleError("Pembayaran belum dapat diverifikasi.")
+        if payment.amount != renewal.agreed_price or payment.currency != renewal.currency:
+            raise BusinessRuleError("Nominal pembayaran tidak sesuai permintaan perpanjangan.")
+        if renewal.status == RenewalStatus.PENDING:
+            old_status = renewal.status
+            renewal.status = RenewalStatus.APPROVED
+            RenewalService(self.db)._audit(
+                "renewal.approved",
+                renewal,
+                telegram_admin_id,
+                old_status,
+            )
+        self.db.flush()
+        RenewalService(self.db).complete_renewal(renewal.id, telegram_admin_id)
+        return self._renewal_order(renewal.id), True
 
     def record_customer_consent(
         self,

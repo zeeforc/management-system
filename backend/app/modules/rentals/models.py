@@ -47,6 +47,7 @@ class Rental(Base, UUIDPrimaryKeyMixin, TimestampMixin, ArchivableMixin):
     duration_unit: Mapped[DurationUnit] = mapped_column(String(32), nullable=False)
     agreed_price: Mapped[Decimal] = mapped_column(Numeric(15, 2), nullable=False)
     account_email_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    account_password_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     profile_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     pin_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     currency: Mapped[str] = mapped_column(String(8), default=DEFAULT_CURRENCY, nullable=False)

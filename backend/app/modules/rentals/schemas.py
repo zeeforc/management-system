@@ -26,6 +26,7 @@ class RentalUpdate(BaseModel):
     agreed_price: Decimal | None = Field(default=None, ge=0)
     currency: str | None = None
     account_email: EmailStr | None = Field(default=None, max_length=320)
+    account_password: str | None = Field(default=None, max_length=256)
     profile: str | None = Field(default=None, max_length=160)
     pin: str | None = Field(default=None, max_length=64)
     status: RentalStatus | None = None
@@ -44,6 +45,7 @@ class RentalCreate(BaseModel):
     currency: str = DEFAULT_CURRENCY
     renewal_model: RenewalModel = RenewalModel.CONTINUOUS
     account_email: EmailStr | None = Field(default=None, max_length=320)
+    account_password: str | None = Field(default=None, max_length=256)
     profile: str | None = Field(default=None, max_length=160)
     pin: str | None = Field(default=None, max_length=64)
 
@@ -66,6 +68,7 @@ class RentalRead(BaseModel):
     agreed_price: Decimal
     currency: str
     account_email: str | None = None
+    account_password: str | None = None
     profile: str | None = None
     pin: str | None = None
     status: RentalStatus

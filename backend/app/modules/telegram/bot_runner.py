@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.core.logging import setup_logging
 from app.modules.telegram.handlers.admin import admin_router
 from app.modules.telegram.handlers.customer import customer_router
+from app.modules.telegram.handlers.renewals import renewal_router
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +17,7 @@ logger = logging.getLogger(__name__)
 def create_dispatcher() -> Dispatcher:
     dp = Dispatcher()
     dp.include_router(admin_router)
+    dp.include_router(renewal_router)
     dp.include_router(customer_router)
     return dp
 
