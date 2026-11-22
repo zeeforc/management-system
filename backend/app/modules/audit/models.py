@@ -1,14 +1,15 @@
 """SQLAlchemy models for audit_logs and system_settings (Section 6.13 & 6.14)."""
 
+import uuid
 from datetime import datetime
 from typing import Any
-import uuid
 
 from sqlalchemy import DateTime, ForeignKey, Index, String, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, UUIDPrimaryKeyMixin
+from app.modules.auth.models import AdminUser as _AdminUser  # noqa: F401
 from app.shared.enums import ActorType
 
 
