@@ -25,7 +25,7 @@ interface Customer {
   id: string
   display_name: string
   telegram_username: string | null
-  telegram_user_id: number | null
+  telegram_chat_id: number | null
   status: string
   internal_notes: string | null
   created_at: string
@@ -55,12 +55,6 @@ const customerForm = ref({
   renewal_model: 'CONTINUOUS',
 })
 const customerError = ref('')
-const showTelegramLink = ref(false)
-const linkCommand = ref('')
-const linkExpiresAt = ref('')
-const linkCustomerName = ref('')
-const linkError = ref('')
-const creatingLink = ref(false)
 let productsRequest: Promise<void> | null = null
 
 const availableVariants = computed(() => {
@@ -225,33 +219,6 @@ async function archiveCustomer(customer: Customer) {
   }
 }
 
-async function createTelegramLink(customer: Customer) {
-  creatingLink.value = true
-  linkError.value = ''
-  linkCommand.value = ''
-  try {
-    const response = await api.post(`/customers/${customer.id}/telegram-link-token`)
-    linkCommand.value = response.data.deep_link_command
-    linkExpiresAt.value = response.data.expires_at
-    linkCustomerName.value = customer.display_name
-    showTelegramLink.value = true
-  } catch (e: any) {
-    linkError.value = e.response?.data?.detail ?? 'Gagal membuat tautan Telegram.'
-    error.value = linkError.value
-  } finally {
-    creatingLink.value = false
-  }
-}
-
-async function copyTelegramCommand() {
-  try {
-    await navigator.clipboard.writeText(linkCommand.value)
-    linkError.value = 'Perintah tautan berhasil disalin.'
-  } catch {
-    linkError.value = 'Salin perintah secara manual dari kolom di atas.'
-  }
-}
-
 function statusBadge(status: string) {
   if (status === 'ACTIVE') return 'bg-[#1c1c1f] text-white'
   if (status === 'INACTIVE') return 'bg-[#1c1c1f]/[0.07] text-[#1c1c1f]/55'
@@ -332,6 +299,9 @@ watch(
             <td class="px-6 py-4 text-gray-500">
               <span v-if="c.telegram_username">@{{ c.telegram_username }}</span>
               <span v-else class="text-gray-300 italic">—</span>
+              <span class="mt-1 block text-xs" :class="c.telegram_chat_id ? 'text-emerald-700' : 'text-amber-700'">
+                {{ c.telegram_chat_id ? 'Bot aktif' : 'Menunggu /start' }}
+              </span>
             </td>
             <td class="px-6 py-4">
               <span class="text-xs px-2 py-0.5 rounded-full font-medium" :class="statusBadge(c.status)">
@@ -347,13 +317,6 @@ watch(
               <div class="flex justify-end gap-2">
                 <button class="rounded-full border border-[#1c1c1f]/10 px-3 py-1.5 text-xs font-semibold" @click="openEditCustomer(c)">Edit</button>
                 <button class="rounded-full border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-700" @click="archiveCustomer(c)">Arsipkan</button>
-                <button
-                  class="rounded-full bg-[#1c1c1f] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40"
-                  :disabled="creatingLink"
-                  @click="createTelegramLink(c)"
-                >
-                  {{ c.telegram_user_id ? 'Tautkan ulang' : 'Buat link' }}
-                </button>
               </div>
             </td>
           </tr>
@@ -370,6 +333,9 @@ watch(
                 <span v-if="c.telegram_username">@{{ c.telegram_username }}</span>
                 <span v-else>Telegram belum ditautkan</span>
               </p>
+              <p class="text-xs" :class="c.telegram_chat_id ? 'text-emerald-700' : 'text-amber-700'">
+                {{ c.telegram_chat_id ? 'Bot aktif' : 'Menunggu /start' }}
+              </p>
             </div>
             <span class="shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold" :class="statusBadge(c.status)">
               {{ c.status }}
@@ -380,13 +346,6 @@ watch(
           <div class="grid grid-cols-2 gap-2">
             <button class="rounded-full border border-[#1c1c1f]/10 px-3 py-2 text-xs font-semibold" @click="openEditCustomer(c)">Edit</button>
             <button class="rounded-full border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-700" @click="archiveCustomer(c)">Arsipkan</button>
-            <button
-              class="col-span-2 rounded-full bg-[#1c1c1f] px-3 py-2 text-xs font-semibold text-white disabled:opacity-40"
-              :disabled="creatingLink"
-              @click="createTelegramLink(c)"
-            >
-              {{ c.telegram_user_id ? 'Buat tautan Telegram baru' : 'Tautkan Telegram' }}
-            </button>
           </div>
         </article>
       </div>
@@ -420,6 +379,9 @@ watch(
                 <input v-model="customerForm.telegram_username" type="text" placeholder="username (opsional)"
                   class="w-full border border-gray-300 rounded-lg pl-7 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
               </div>
+              <p class="mt-1 text-xs leading-5 text-gray-500">
+                Isi username customer yang sudah menyetujui pesan. Customer perlu membuka bot dan mengirim /start sekali.
+              </p>
             </div>
             <div>
               <label class="block text-sm font-medium text-gray-700 mb-1">Status</label>
@@ -540,40 +502,5 @@ watch(
       </Transition>
     </Teleport>
 
-    <Teleport to="body">
-      <Transition name="bento-overlay">
-        <div
-          v-if="showTelegramLink"
-          class="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/35 p-0 backdrop-blur-md sm:items-center sm:p-4"
-          @click.self="showTelegramLink = false"
-        >
-          <div class="bento-modal w-full space-y-4 rounded-t-[28px] p-6 sm:max-w-md sm:rounded-[28px]">
-            <div class="flex items-center justify-between">
-              <div>
-                <p class="text-xs font-semibold uppercase tracking-wider text-[#1c1c1f]/40">Telegram quick access</p>
-                <h2 class="mt-1 text-lg font-bold text-[#1c1c1f]">{{ linkCustomerName }}</h2>
-              </div>
-              <button class="text-xl text-[#1c1c1f]/40" @click="showTelegramLink = false">×</button>
-            </div>
-            <p class="text-sm leading-6 text-[#1c1c1f]/60">
-              Kirim perintah ini ke customer. Tautan hanya dapat digunakan sekali dan akan kedaluwarsa
-              {{ formatDate(linkExpiresAt) }}.
-            </p>
-            <div class="rounded-2xl bg-[#1c1c1f]/[0.04] p-3">
-              <code class="block break-all text-sm font-semibold text-[#1c1c1f]">{{ linkCommand }}</code>
-            </div>
-            <p v-if="linkError" class="text-xs text-[#1c1c1f]/55">{{ linkError }}</p>
-            <div class="flex gap-3">
-              <button class="bento-white flex-1 py-2.5 text-sm font-semibold" @click="copyTelegramCommand">
-                Salin perintah
-              </button>
-              <button class="bento-primary flex-1 py-2.5 text-sm font-semibold" @click="showTelegramLink = false">
-                Selesai
-              </button>
-            </div>
-          </div>
-        </div>
-      </Transition>
-    </Teleport>
   </AppLayout>
 </template>

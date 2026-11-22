@@ -3,6 +3,7 @@
 import uuid
 from datetime import timedelta
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -20,8 +21,36 @@ from app.modules.customers.schemas import (
     TelegramLinkTokenResponse,
 )
 from app.shared.datetime_utils import utc_now
-from app.shared.enums import ActorType, ConsentStatus
+from app.shared.enums import ActorType, ConsentStatus, ConsentType
 from app.shared.pagination import PaginatedResponse, PaginationParams
+
+
+def ensure_initial_telegram_consents(db: Session, customer_id: uuid.UUID) -> bool:
+    recorded_types = set(
+        db.scalars(
+            select(NotificationConsent.consent_type).where(
+                NotificationConsent.customer_id == customer_id,
+            )
+        ).all()
+    )
+    now = utc_now()
+    added = False
+    for consent_type in (
+        ConsentType.TELEGRAM_REMINDERS,
+        ConsentType.TELEGRAM_RENEWAL_OFFERS,
+    ):
+        if consent_type not in recorded_types:
+            db.add(
+                NotificationConsent(
+                    customer_id=customer_id,
+                    consent_type=consent_type,
+                    consent_status=ConsentStatus.GRANTED,
+                    source="ADMIN_CONFIRMED",
+                    consented_at=now,
+                )
+            )
+            added = True
+    return added
 
 
 class CustomerService:
@@ -58,7 +87,9 @@ class CustomerService:
 
     def create_customer(self, payload: CustomerCreate) -> CustomerRead:
         username = (
-            payload.telegram_username.lstrip("@").strip() if payload.telegram_username else None
+            payload.telegram_username.lstrip("@").strip() or None
+            if payload.telegram_username
+            else None
         )
         customer = Customer(
             display_name=payload.display_name.strip(),
@@ -67,8 +98,19 @@ class CustomerService:
             internal_notes=payload.internal_notes,
         )
         self.repo.create_customer(customer)
+        telegram_consents_granted = (
+            ensure_initial_telegram_consents(self.db, customer.id)
+            if username
+            else False
+        )
         self._audit(
-            "customer.created", str(customer.id), None, {"display_name": customer.display_name}
+            "customer.created",
+            str(customer.id),
+            None,
+            {
+                "display_name": customer.display_name,
+                "telegram_consents_granted": telegram_consents_granted,
+            },
         )
         self.db.commit()
         self.db.refresh(customer)
@@ -79,6 +121,7 @@ class CustomerService:
         if customer is None:
             raise NotFoundError("Customer", customer_id)
         before = {"display_name": customer.display_name, "status": customer.status}
+        telegram_consents_granted = False
         if payload.display_name is not None:
             customer.display_name = payload.display_name.strip()
         if "telegram_username" in payload.model_fields_set:
@@ -86,6 +129,8 @@ class CustomerService:
             customer.telegram_username = (
                 username.lstrip("@").strip() or None if username is not None else None
             )
+            if customer.telegram_username:
+                telegram_consents_granted = ensure_initial_telegram_consents(self.db, customer.id)
         if payload.status is not None:
             customer.status = payload.status
         if "internal_notes" in payload.model_fields_set:
@@ -94,7 +139,11 @@ class CustomerService:
             "customer.updated",
             str(customer.id),
             before,
-            {"display_name": customer.display_name, "status": customer.status},
+            {
+                "display_name": customer.display_name,
+                "status": customer.status,
+                "telegram_consents_granted": telegram_consents_granted,
+            },
         )
         self.db.commit()
         self.db.refresh(customer)

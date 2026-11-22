@@ -1,4 +1,4 @@
-"""Customer Telegram linking, consent, and renewal-offer callbacks."""
+"""Customer Telegram linking, consent, feedback, and renewal-offer callbacks."""
 
 import logging
 import uuid
@@ -76,16 +76,34 @@ async def cmd_start(message: Message) -> None:
 
         await message.answer(
             f"Halo {customer_name}, akun Telegram Anda berhasil ditautkan.\n\n"
-            "Untuk mengaktifkan pengingat dan penawaran perpanjangan, kirim /consent. "
-            "Kirim /stop kapan saja untuk mencabut persetujuan. "
+            "Gunakan /perpanjang untuk memperpanjang langganan. "
+            "Kirim /stop kapan saja untuk menghentikan pesan otomatis. "
             "Ketik /rating untuk memberi rating dan saran toko."
+        )
+        return
+
+    try:
+        with SessionLocal() as db:
+            matched_customer_name = TelegramService(db).link_customer_by_username(
+                sender.id,
+                message.chat.id,
+                sender.username,
+            )
+    except BusinessRuleError as exc:
+        await message.answer(f"⚠️ {exc}")
+        return
+    if matched_customer_name is not None:
+        await message.answer(
+            f"Halo {matched_customer_name}, akun Telegram Anda berhasil ditautkan.\n\n"
+            "Gunakan /perpanjang untuk memperpanjang langganan. "
+            "Kirim /stop kapan saja untuk menghentikan pesan otomatis."
         )
         return
 
     await message.answer(
         "👋 Selamat datang di Bot Rental Monitoring.\n"
-        "Minta tautan akun dari admin, lalu buka tautan tersebut melalui chat pribadi "
-        "dengan bot ini. Gunakan /help untuk melihat perintah pelanggan."
+        "Akun Telegram Anda belum ditemukan. Minta admin mencatat username Telegram Anda, "
+        "lalu kirim /start sekali lagi. Gunakan /help untuk melihat perintah pelanggan."
     )
 
 
@@ -249,8 +267,9 @@ async def cmd_stop(message: Message) -> None:
 async def cmd_customer_help(message: Message) -> None:
     await message.answer(
         "<b>Perintah pelanggan</b>\n"
-        "/start — tautkan akun pelanggan\n"
-        "/consent — setujui pengingat dan penawaran Telegram\n"
+        "/start — hubungkan akun berdasarkan username yang dicatat admin\n"
+        "/perpanjang — pilih langganan dan ajukan perpanjangan\n"
+        "/consent — aktifkan kembali pesan otomatis setelah /stop\n"
         "/rating — beri rating dan saran untuk toko\n"
         "/stop — cabut persetujuan dan hentikan pesan otomatis",
         parse_mode="HTML",

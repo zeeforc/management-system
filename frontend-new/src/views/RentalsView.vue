@@ -44,6 +44,7 @@ interface Rental {
   agreed_price: string
   currency: string
   account_email: string | null
+  account_password: string | null
   profile: string | null
   pin: string | null
   status: string
@@ -68,6 +69,7 @@ const addingRental = ref(false)
 const editingRentalId = ref<string | null>(null)
 const rentalError = ref('')
 const revealedPins = ref(new Set<string>())
+const revealedPasswords = ref(new Set<string>())
 let rentalFormDataRequest: Promise<void> | null = null
 
 const rentalForm = ref({
@@ -80,6 +82,7 @@ const rentalForm = ref({
   duration_unit: 'MONTHS',
   agreed_price: '',
   account_email: '',
+  account_password: '',
   profile: '',
   pin: '',
   renewal_model: 'CONTINUOUS',
@@ -149,6 +152,7 @@ async function openAddRental() {
     duration_unit: 'MONTHS',
     agreed_price: '',
     account_email: '',
+    account_password: '',
     profile: '',
     pin: '',
     renewal_model: 'CONTINUOUS',
@@ -182,6 +186,7 @@ async function openEditRental(rental: Rental) {
     duration_unit: rental.duration_unit,
     agreed_price: rental.agreed_price,
     account_email: rental.account_email ?? '',
+    account_password: rental.account_password ?? '',
     profile: rental.profile ?? '',
     pin: rental.pin ?? '',
     renewal_model: rental.renewal_model,
@@ -221,6 +226,7 @@ async function submitRental() {
       start_date: rentalForm.value.start_date,
       renewal_model: rentalForm.value.renewal_model,
       account_email: rentalForm.value.account_email.trim() || null,
+      account_password: rentalForm.value.account_password.trim() || null,
     }
     if (selectedProduct.value?.has_profile_pin) {
       payload.profile = rentalForm.value.profile.trim() || null
@@ -256,6 +262,7 @@ async function submitRental() {
       duration_unit: 'MONTHS',
       agreed_price: '',
       account_email: '',
+      account_password: '',
       profile: '',
       pin: '',
       renewal_model: 'CONTINUOUS',
@@ -296,6 +303,13 @@ function togglePin(rentalId: string) {
   if (updated.has(rentalId)) updated.delete(rentalId)
   else updated.add(rentalId)
   revealedPins.value = updated
+}
+
+function togglePassword(rentalId: string) {
+  const updated = new Set(revealedPasswords.value)
+  if (updated.has(rentalId)) updated.delete(rentalId)
+  else updated.add(rentalId)
+  revealedPasswords.value = updated
 }
 
 onMounted(fetchData)
@@ -365,6 +379,18 @@ onMounted(fetchData)
                 <span v-if="r.account_email" class="mt-1 block text-xs text-gray-500">
                   Akun: {{ r.account_email }}
                 </span>
+                <span v-if="r.account_password" class="mt-1 block text-xs text-gray-500">
+                  Password:
+                  <span class="font-mono">{{ revealedPasswords.has(r.id) ? r.account_password : '••••' }}</span>
+                  <button
+                    type="button"
+                    class="ml-1 font-semibold text-[#1c1c1f]/70 underline"
+                    :aria-label="revealedPasswords.has(r.id) ? 'Sembunyikan password' : 'Tampilkan password'"
+                    @click="togglePassword(r.id)"
+                  >
+                    {{ revealedPasswords.has(r.id) ? 'Sembunyikan' : 'Lihat' }}
+                  </button>
+                </span>
                 <span v-if="r.profile || r.pin" class="mt-1 block text-xs text-gray-500">
                   Profile: {{ r.profile || '—' }} · PIN:
                   <span class="font-mono">{{ revealedPins.has(r.id) ? r.pin : '••••' }}</span>
@@ -413,6 +439,18 @@ onMounted(fetchData)
               <h2 class="text-sm font-semibold text-slate-900">{{ r.customer_display_name || 'Customer' }}</h2>
               <p class="text-xs text-slate-600">{{ r.product_name }} - {{ r.product_variant_name }}</p>
               <p v-if="r.account_email" class="break-all text-xs text-slate-500">Akun: {{ r.account_email }}</p>
+              <p v-if="r.account_password" class="text-xs text-slate-500">
+                Password:
+                <span class="font-mono">{{ revealedPasswords.has(r.id) ? r.account_password : '••••' }}</span>
+                <button
+                  type="button"
+                  class="ml-1 underline"
+                  :aria-label="revealedPasswords.has(r.id) ? 'Sembunyikan password' : 'Tampilkan password'"
+                  @click="togglePassword(r.id)"
+                >
+                  {{ revealedPasswords.has(r.id) ? 'Sembunyikan' : 'Lihat' }}
+                </button>
+              </p>
               <p v-if="r.profile || r.pin" class="text-xs text-slate-500">
                 Profile: {{ r.profile || '—' }} · PIN:
                 <span class="font-mono">{{ revealedPins.has(r.id) ? r.pin : '••••' }}</span>
@@ -587,6 +625,17 @@ onMounted(fetchData)
                   class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
+              <div>
+                <label class="mb-1 block text-sm font-medium text-gray-700">Password akun</label>
+                <input
+                  v-model="rentalForm.account_password"
+                  type="password"
+                  maxlength="256"
+                  autocomplete="new-password"
+                  placeholder="Password akun produk"
+                  class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
               <div v-if="selectedProduct?.has_profile_pin" class="grid grid-cols-2 gap-3">
                 <div>
                   <label class="mb-1 block text-sm font-medium text-gray-700">Profile</label>
@@ -612,8 +661,9 @@ onMounted(fetchData)
                 </div>
               </div>
               <p v-if="selectedProduct?.has_profile_pin" class="text-xs text-gray-500">
-                Profile dan PIN tersimpan terenkripsi.
+                Email, password, profile, dan PIN tersimpan terenkripsi.
               </p>
+              <p v-else class="text-xs text-gray-500">Email dan password tersimpan terenkripsi.</p>
             </div>
 
             <div class="flex gap-3 pt-2">
