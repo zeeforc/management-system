@@ -7,8 +7,10 @@ from app.db.session import SessionLocal
 from app.modules.notifications.repository import NotificationRepository
 from app.modules.notifications.service import NotificationService
 from app.modules.notifications.tasks import dispatch_reminder_task
+from app.modules.telegram.broadcast_tasks import dispatch_telegram_broadcast_task
+from app.modules.telegram.models import TelegramBroadcast
 from app.shared.datetime_utils import utc_now
-from app.shared.enums import NotificationStatus, OutboxStatus
+from app.shared.enums import NotificationStatus, OutboxStatus, TelegramBroadcastStatus
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -42,6 +44,33 @@ def process_outbox_events() -> dict[str, int]:
         db.commit()
 
         for event in events:
+            if event.aggregate_type == "telegram_broadcast":
+                broadcast_id = event.payload.get("broadcast_id")
+                broadcast = repository.db.get(TelegramBroadcast, event.aggregate_id)
+                if (
+                    not broadcast_id
+                    or broadcast is None
+                    or str(broadcast.id) != str(broadcast_id)
+                ):
+                    event.status = OutboxStatus.FAILED
+                    event.last_error = "Telegram broadcast outbox reference is invalid."
+                    event.processed_at = utc_now()
+                    db.commit()
+                    continue
+                if broadcast.status not in (
+                    TelegramBroadcastStatus.QUEUED,
+                    TelegramBroadcastStatus.SENDING,
+                ):
+                    event.status = OutboxStatus.PROCESSED
+                    event.processed_at = utc_now()
+                    db.commit()
+                    continue
+                dispatch_telegram_broadcast_task.apply_async(args=[str(broadcast.id)])
+                event.last_error = None
+                dispatched += 1
+                db.commit()
+                continue
+
             notification_id = event.payload.get("notification_id")
             if event.aggregate_type != "notification" or not notification_id:
                 event.status = OutboxStatus.FAILED

@@ -10,6 +10,7 @@ celery_app = Celery(
     backend=settings.CELERY_RESULT_BACKEND,
     include=[
         "app.modules.notifications.tasks",
+        "app.modules.telegram.broadcast_tasks",
         "app.workers.scheduled_tasks",
     ],
 )

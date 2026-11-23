@@ -134,6 +134,23 @@ class OutboxStatus(StrEnum):
     FAILED = "FAILED"
 
 
+class TelegramBroadcastStatus(StrEnum):
+    DRAFT = "DRAFT"
+    QUEUED = "QUEUED"
+    SENDING = "SENDING"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
+
+
+class TelegramBroadcastDeliveryStatus(StrEnum):
+    PENDING = "PENDING"
+    SENDING = "SENDING"
+    SENT = "SENT"
+    FAILED = "FAILED"
+    SKIPPED = "SKIPPED"
+    AMBIGUOUS = "AMBIGUOUS"
+
+
 class ActorType(StrEnum):
     ADMIN = "ADMIN"
     CUSTOMER = "CUSTOMER"

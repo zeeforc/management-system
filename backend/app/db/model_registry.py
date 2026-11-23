@@ -19,6 +19,7 @@ from app.modules.payments.models import Payment
 from app.modules.products.models import Product, ProductVariant
 from app.modules.renewals.models import RenewalOffer, RentalRenewal
 from app.modules.rentals.models import Rental
+from app.modules.telegram.models import TelegramBroadcast, TelegramBroadcastRecipient
 
 __all__ = [
     "AdminUser",
@@ -41,4 +42,6 @@ __all__ = [
     "IdempotencyRecord",
     "AuditLog",
     "SystemSetting",
+    "TelegramBroadcast",
+    "TelegramBroadcastRecipient",
 ]

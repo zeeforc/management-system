@@ -26,6 +26,11 @@ from app.modules.products.schemas import ProductCreate, ProductVariantCreate
 from app.modules.products.service import ProductService
 from app.modules.rentals.schemas import RentalCreate
 from app.modules.rentals.service import RentalService
+from app.modules.telegram.broadcast_service import (
+    TelegramBroadcastPreview,
+    TelegramBroadcastService,
+)
+from app.modules.telegram.callbacks import TelegramBroadcastCallback
 from app.modules.telegram.service import TelegramService
 from app.shared.enums import (
     CustomerStatus,
@@ -84,6 +89,10 @@ class RentalWizard(StatesGroup):
     account_password = State()
     profile = State()
     pin = State()
+
+
+class BroadcastWizard(StatesGroup):
+    content = State()
 
 
 def _is_admin(message: Message) -> bool:
@@ -195,6 +204,140 @@ async def cmd_set_qris(message: Message) -> None:
             message.from_user.id,
         )
     await message.answer("QRIS perpanjangan berhasil diperbarui.")
+
+
+def _broadcast_confirmation_keyboard(broadcast_id: uuid.UUID) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Kirim sekarang",
+                    callback_data=TelegramBroadcastCallback(
+                        action="confirm",
+                        broadcast_id=str(broadcast_id),
+                    ).pack(),
+                ),
+                InlineKeyboardButton(
+                    text="Batalkan",
+                    callback_data=TelegramBroadcastCallback(
+                        action="cancel",
+                        broadcast_id=str(broadcast_id),
+                    ).pack(),
+                ),
+            ]
+        ]
+    )
+
+
+async def _show_broadcast_preview(
+    message: Message,
+    preview: TelegramBroadcastPreview,
+) -> None:
+    if preview.media_type == "PHOTO":
+        await message.answer_photo(
+            photo=preview.media_file_id or "",
+            caption=preview.content_text,
+        )
+    elif preview.media_type == "VIDEO":
+        await message.answer_video(
+            video=preview.media_file_id or "",
+            caption=preview.content_text,
+        )
+    else:
+        await message.answer(preview.content_text or "")
+    await message.answer(
+        f"Preview broadcast untuk {preview.recipient_count} customer. Kirim sekarang?",
+        reply_markup=_broadcast_confirmation_keyboard(preview.broadcast_id),
+    )
+
+
+@admin_router.message(Command("broadcast"))
+async def cmd_broadcast(message: Message, state: FSMContext) -> None:
+    if not await _require_private_admin(message):
+        return
+    await state.clear()
+    await state.set_state(BroadcastWizard.content)
+    await message.answer(
+        "Kirim teks, foto dengan caption, atau video dengan caption untuk broadcast. "
+        "Ketik /cancel untuk membatalkan."
+    )
+
+
+@admin_router.message(BroadcastWizard.content)
+async def receive_broadcast_content(message: Message, state: FSMContext) -> None:
+    if not await _require_private_admin(message):
+        return
+    if message.from_user is None:
+        await message.answer("Akun Telegram admin tidak ditemukan.")
+        return
+    raw_text = message.caption if message.photo or message.video else message.text
+    media_type = "PHOTO" if message.photo else "VIDEO" if message.video else None
+    media_file_id = (
+        message.photo[-1].file_id
+        if message.photo
+        else message.video.file_id
+        if message.video
+        else None
+    )
+    command_parts = raw_text.strip().split(maxsplit=1) if raw_text else []
+    if command_parts and command_parts[0].split("@")[0] == "/cancel":
+        await state.clear()
+        await message.answer("Pembuatan broadcast dibatalkan.")
+        return
+    try:
+        with SessionLocal() as db:
+            preview = TelegramBroadcastService(db).create_draft(
+                message.from_user.id,
+                raw_text,
+                media_type,
+                media_file_id,
+            )
+    except BusinessRuleError as exc:
+        await message.answer(str(exc))
+        return
+    await state.clear()
+    await _show_broadcast_preview(message, preview)
+
+
+@admin_router.callback_query(TelegramBroadcastCallback.filter())
+async def on_broadcast_action(
+    query: CallbackQuery,
+    callback_data: TelegramBroadcastCallback,
+) -> None:
+    if not _is_admin_callback(query):
+        await query.answer("Akses ditolak.", show_alert=True)
+        return
+    message = _private_callback_message(query)
+    if message is None:
+        await query.answer("Gunakan broadcast melalui chat pribadi.", show_alert=True)
+        return
+    try:
+        broadcast_id = uuid.UUID(callback_data.broadcast_id)
+        with SessionLocal() as db:
+            service = TelegramBroadcastService(db)
+            if callback_data.action == "cancel":
+                service.cancel(broadcast_id, query.from_user.id)
+                queued = False
+                recipient_count = 0
+            elif callback_data.action == "confirm":
+                queued, recipient_count = service.confirm(broadcast_id, query.from_user.id)
+            else:
+                raise BusinessRuleError("Pilihan broadcast tidak valid.")
+    except (ValueError, BusinessRuleError) as exc:
+        await query.answer(str(exc) or "Draft broadcast tidak valid.", show_alert=True)
+        return
+
+    await query.answer()
+    await message.edit_reply_markup(reply_markup=None)
+    if callback_data.action == "cancel":
+        await message.answer("Broadcast dibatalkan; referensi media sementara sudah dihapus.")
+    elif not queued:
+        await message.answer("Broadcast ini sudah pernah masuk antrean.")
+    else:
+        await message.answer(
+            f"Broadcast masuk antrean untuk {recipient_count} customer. "
+            "Bot akan mengirim ringkasan setelah proses selesai."
+        )
 
 
 @admin_router.message(Command("products"))
@@ -1016,6 +1159,7 @@ async def cmd_admin_help(message: Message) -> None:
         "/add_customer — tambah customer\n"
         "/add_rental — tambah rental interaktif\n"
         "/setqris — ganti QRIS perpanjangan dengan foto\n"
+        "/broadcast — kirim pengumuman teks/foto/video\n"
         "/dashboard — ringkasan bisnis\n"
         "/products [halaman] — produk dan varian\n"
         "/rentals [halaman] — rental aktif\n"

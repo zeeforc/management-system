@@ -18,3 +18,8 @@ class RenewalRentalCallback(CallbackData, prefix="renew_rental"):
 class RenewalMonthCallback(CallbackData, prefix="renew_month"):
     rental_id: str
     months: int
+
+
+class TelegramBroadcastCallback(CallbackData, prefix="telegram_broadcast"):
+    action: str
+    broadcast_id: str

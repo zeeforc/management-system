@@ -106,6 +106,10 @@ The web application remains the primary review/payment interface; bot commands p
 
 Telegram sends are not transactionally atomic with PostgreSQL. If the API outcome is uncertain, the system records `AMBIGUOUS` and does not retry automatically, avoiding indefinite duplicate sends while making the uncertainty visible to administrators.
 
+### Admin broadcast
+
+An allowlisted administrator can open a private chat with the bot, send `/broadcast`, then submit a text message, a photo with caption, or a video with caption. The bot shows a preview and audience count before the admin confirms or cancels. Only active customers with a linked Telegram chat and latest `TELEGRAM_REMINDERS` consent granted are included; consent is checked again before each delivery. Broadcast media uses Telegram `file_id` references without downloading files to the server. The reference and campaign content are cleared when the send finishes (or the draft is canceled), while delivery totals remain for the admin summary.
+
 ## Production Deployment (Docker Compose)
 
 Do not deploy with the sample credentials. Set `.env` values first:
